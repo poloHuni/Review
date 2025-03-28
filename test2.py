@@ -548,7 +548,7 @@ def record_audio():
                 st.rerun()
     
     return None
-
+    
 def process_review(transcribed_text):
     if not transcribed_text:
         return None
