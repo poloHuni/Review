@@ -164,8 +164,8 @@ def init_session_state():
         st.session_state.is_recording = False
     if 'record_again' not in st.session_state:
         st.session_state.record_again = False
-    if 'recording_initialized' not in st.session_state:  # Add this new line
-        st.session_state.recording_initialized = False
+    if 'recording_started' not in st.session_state:  # Add this new line
+        st.session_state.recording_started = False
     if 'customer_info' not in st.session_state:
         st.session_state.customer_info = {"name": "", "email": "", "phone": ""}
     # New session state variables for login system
@@ -451,19 +451,19 @@ def record_audio():
     process_container = st.empty()
     
     # Initialize recording state if not already present
-    if 'recording_initialized' not in st.session_state:
-        st.session_state.recording_initialized = False
+    if 'recording_started' not in st.session_state:
+        st.session_state.recording_started = False
     
     # Handle "Record Again" flow
     if st.session_state.record_again:
         st.session_state.record_again = False
-        st.session_state.recording_initialized = True
+        st.session_state.recording_started = False
         st.rerun()
     
     # Show instruction
     instruction_container.markdown("""
     <div style="padding: 15px; border: 1px solid #ddd; border-radius: 10px; margin-bottom: 10px;">
-        <p>🎙️ Click the microphone to start/stop recording your feedback (max 25 sec)</p>
+        <p>🎙️ Click the microphone to start recording, then click again when finished (max 25 sec)</p>
     </div>
     """, unsafe_allow_html=True)
     
@@ -479,29 +479,30 @@ def record_audio():
                 icon_name="microphone",
                 pause_threshold=25.0,
                 # These parameters help with consistent behavior
-                energy_threshold=0.01,
-                sample_rate=44100,
-                # Force the recorder to be in the reinitialized state
-                key=f"audio_recorder_{st.session_state.recording_initialized}"
+                energy_threshold=0.005,  # Even lower threshold
+                sample_rate=44100
             )
         
-        # If this is the first load but not a rerecord, initialize recording state
-        if not st.session_state.recording_initialized:
-            st.session_state.recording_initialized = True
-            st.rerun()
-            
-        # Process recorded audio
+        # Process recorded audio only after explicitly clicking to stop
         if audio_bytes:
-            # Add a check to ensure we have enough data
-            if len(audio_bytes) < 500:  # Less strict threshold since we're not relying on hold
-                instruction_container.warning("Recording was too short. Please try again and speak clearly.")
+            # If this is the first click and recording hasn't started yet
+            if not st.session_state.recording_started:
+                # Simply mark that recording has started, don't process yet
+                st.session_state.recording_started = True
+                instruction_container.info("Recording started! Click the microphone again when you're finished.")
+                time.sleep(0.5)  # Small delay to ensure the UI updates
+                st.rerun()
             else:
+                # This is the second click (to stop recording), so process the audio
+                # Skip the minimum length check since this is an explicit stop
                 timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
                 filename = f"review_{st.session_state.customer_id}_{timestamp}.wav"
                 
                 with open(filename, "wb") as f:
                     f.write(audio_bytes)
                 
+                # Reset recording started state for next time
+                st.session_state.recording_started = False
                 st.session_state.audio_file = filename
                 instruction_container.success("Recording completed!")
                 st.rerun()  # Force a rerun to update UI
@@ -547,7 +548,7 @@ def record_audio():
                 st.rerun()
     
     return None
-    
+
 def process_review(transcribed_text):
     if not transcribed_text:
         return None
