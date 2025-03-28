@@ -11,10 +11,12 @@ from langchain.chat_models import ChatOpenAI
 from langchain.memory.chat_message_histories import StreamlitChatMessageHistory
 import uuid
 from audio_recorder_streamlit import audio_recorder
-from datetime import datetime
+from datetime import datetime, timedelta
 from dotenv import load_dotenv
 import re
+import extra_streamlit_components as stx
 
+OWNER_EMAIL = "natnaelgebremichaeltewelde@gmail.com"
 # Load environment variables
 load_dotenv()
 
@@ -69,6 +71,80 @@ def save_review(review_data):
         return False
 
 # Initialize session state variables
+# Function to get the cookie manager
+def get_cookie_manager():
+    """
+    Singleton pattern for cookie manager to avoid duplicate key errors.
+    Returns a single instance of the CookieManager across the application.
+    """
+    # Check if we already have a cookie manager in session state
+    if 'cookie_manager' not in st.session_state:
+        # Create with a unique key
+        st.session_state.cookie_manager = stx.CookieManager(key="unique_cookie_manager")
+    
+    # Return the stored instance
+    return st.session_state.cookie_manager
+
+# User management functions
+def load_users_from_db():
+    try:
+        if os.path.exists("restaurant_users.xlsx"):
+            return pd.read_excel("restaurant_users.xlsx").to_dict(orient='records')
+        else:
+            # Create empty file if doesn't exist
+            df = pd.DataFrame(columns=[
+                "user_id", "username", "email", "phone", "name", 
+                "last_login", "registration_date"
+            ])
+            df.to_excel("restaurant_users.xlsx", index=False)
+            return []
+    except Exception as e:
+        st.error(f"Error loading users database: {str(e)}")
+        return []
+
+def save_user(user_data):
+    try:
+        # Load existing users
+        all_users = load_users_from_db()
+        
+        # Check if user already exists
+        existing_user = next((user for user in all_users if user.get('user_id') == user_data.get('user_id')), None)
+        
+        if existing_user:
+            # Update existing user
+            for key, value in user_data.items():
+                existing_user[key] = value
+        else:
+            # Add new user
+            all_users.append(user_data)
+        
+        # Convert to DataFrame
+        df_users = pd.DataFrame(all_users)
+        
+        # Save to Excel
+        df_users.to_excel("restaurant_users.xlsx", index=False)
+        return True
+    except Exception as e:
+        st.error(f"Error saving user: {str(e)}")
+        return False
+
+def find_user_by_email(email):
+    users = load_users_from_db()
+    return next((user for user in users if user.get('email') == email), None)
+
+def get_user_reviews(user_id):
+    try:
+        if os.path.exists("restaurant_reviews.xlsx"):
+            df = pd.read_excel("restaurant_reviews.xlsx")
+            # Filter reviews by user_id
+            user_reviews = df[df['customer_id'] == user_id].to_dict(orient='records')
+            return user_reviews
+        return []
+    except Exception as e:
+        st.error(f"Error loading user reviews: {str(e)}")
+        return []
+
+# Update these functions in your main application
 def init_session_state():
     if 'memory' not in st.session_state:
         st.session_state.memory = ConversationBufferMemory(return_messages=True)
@@ -90,6 +166,166 @@ def init_session_state():
         st.session_state.record_again = False
     if 'customer_info' not in st.session_state:
         st.session_state.customer_info = {"name": "", "email": "", "phone": ""}
+    # New session state variables for login system
+    if 'is_logged_in' not in st.session_state:
+        st.session_state.is_logged_in = False
+    if 'current_user' not in st.session_state:
+        st.session_state.current_user = None
+    if 'login_error' not in st.session_state:
+        st.session_state.login_error = None
+    if 'register_success' not in st.session_state:
+        st.session_state.register_success = None
+    # Add the is_owner flag
+    if 'is_owner' not in st.session_state:
+        st.session_state.is_owner = False
+        
+# Login form
+def render_login_form():
+    st.markdown("""
+    <h3 style="color: #5a7d7c;">Login</h3>
+    <p>Login to view your previous reviews and submit new ones.</p>
+    """, unsafe_allow_html=True)
+    
+    email = st.text_input("Email", key="login_email")
+    
+    if st.button("Login"):
+        user = find_user_by_email(email)
+        cookie_manager = get_cookie_manager()
+
+        if user:
+            # Set cookie
+            cookie_manager.set(
+                cookie="user_id", 
+                val=user.get('user_id'),
+                expires_at=datetime.now() + timedelta(days=30)
+            )            
+            # Update session state
+            st.session_state.is_logged_in = True
+            st.session_state.current_user = user
+            st.session_state.customer_id = user.get('user_id')
+            st.session_state.customer_info = {
+                "name": user.get('name', ""),
+                "email": user.get('email', ""),
+                "phone": user.get('phone', "")
+            }
+            
+            # Check if this user is the owner
+            st.session_state.is_owner = (user.get('email') == OWNER_EMAIL)
+            
+            # Update last login time
+            user['last_login'] = datetime.now().isoformat()
+            save_user(user)
+            
+            st.rerun()
+        else:
+            st.session_state.login_error = "User not found. Please register first."
+    
+    if st.session_state.login_error:
+        st.error(st.session_state.login_error)
+    
+    st.markdown("<hr>", unsafe_allow_html=True)
+    st.markdown("""
+    <h3 style="color: #5a7d7c;">Register</h3>
+    <p>New user? Register to start sharing your feedback.</p>
+    """, unsafe_allow_html=True)
+    
+    with st.form("register_form"):
+        name = st.text_input("Full Name")
+        email = st.text_input("Email")
+        phone = st.text_input("Phone")
+        submit = st.form_submit_button("Register")
+        
+        if submit:
+            # Check if user already exists
+            existing_user = find_user_by_email(email)
+            
+            if existing_user:
+                st.error("A user with this email already exists. Please login instead.")
+            elif not email or not name:
+                st.error("Name and email are required.")
+            else:
+                # Create new user
+                user_id = str(uuid.uuid4())
+                new_user = {
+                    "user_id": user_id,
+                    "username": email.split('@')[0],
+                    "email": email,
+                    "phone": phone,
+                    "name": name,
+                    "last_login": datetime.now().isoformat(),
+                    "registration_date": datetime.now().isoformat()
+                }
+                
+                if save_user(new_user):
+                    # Set cookie
+                    cookie_manager = get_cookie_manager()
+                    cookie_manager.set(
+                        cookie="user_id", 
+                        val=user_id,
+                        expires_at=datetime.now() + timedelta(days=30)
+                    )                    
+                    # Update session state
+                    st.session_state.is_logged_in = True
+                    st.session_state.current_user = new_user
+                    st.session_state.customer_id = user_id
+                    st.session_state.customer_info = {
+                        "name": name,
+                        "email": email,
+                        "phone": phone
+                    }
+                    st.session_state.register_success = "Registration successful!"
+                    st.rerun()
+                else:
+                    st.error("Error during registration. Please try again.")
+
+# Check if user is logged in via cookie
+def check_login_status():
+    if st.session_state.is_logged_in:
+        return True
+        
+    cookie_manager = get_cookie_manager()
+    user_id = cookie_manager.get("user_id")
+    
+    if user_id:
+        # Find user in database
+        users = load_users_from_db()
+        user = next((u for u in users if u.get('user_id') == user_id), None)
+        
+        if user:
+            # Update session state
+            st.session_state.is_logged_in = True
+            st.session_state.current_user = user
+            st.session_state.customer_id = user.get('user_id')
+            st.session_state.customer_info = {
+                "name": user.get('name', ""),
+                "email": user.get('email', ""),
+                "phone": user.get('phone', "")
+            }
+            
+            # Check if this user is the owner
+            st.session_state.is_owner = (user.get('email') == OWNER_EMAIL)
+            
+            # Update last login time
+            user['last_login'] = datetime.now().isoformat()
+            save_user(user)
+            
+            return True
+    
+    return False
+
+# Logout function
+def logout():
+    cookie_manager = get_cookie_manager()
+    cookie_manager.delete("user_id")
+    
+    # Reset session state
+    st.session_state.is_logged_in = False
+    st.session_state.current_user = None
+    st.session_state.customer_id = str(uuid.uuid4())
+    st.session_state.customer_info = {"name": "", "email": "", "phone": ""}
+    st.session_state.is_owner = False
+    
+    st.rerun()
 
 # LLM functions
 def get_llm():
@@ -443,7 +679,43 @@ def load_css():
         background-color: #f7f7f7;
         margin-bottom: 15px;
     }
-                    /* Star rating animation */
+    
+    /* Login form styling */
+    .login-container {
+        max-width: 500px;
+        margin: 0 auto;
+        padding: 30px;
+        border-radius: 10px;
+        border: 1px solid #ddd;
+        box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+    }
+    
+    .login-header {
+        color: #5a7d7c;
+        text-align: center;
+        margin-bottom: 20px;
+    }
+    
+    .form-divider {
+        margin: 25px 0;
+        border-top: 1px solid #ddd;
+    }
+    
+    /* User account section */
+    .user-account {
+        margin-bottom: 20px;
+        padding: 15px;
+        border-radius: 10px;
+        background-color: #f7f7f7;
+    }
+    
+    .user-greeting {
+        font-weight: bold;
+        font-size: 18px;
+        color: #5a7d7c;
+    }
+    
+    /* Star rating animation */
     @keyframes star-pop {
         0% { transform: scale(0.8); opacity: 0.4; }
         50% { transform: scale(1.2); opacity: 0.9; }
@@ -543,7 +815,21 @@ def main():
         </div>
         """, unsafe_allow_html=True)
         
-        # Show recent reviews
+        # User account section
+        st.header("Your Account")
+        
+        # If user is logged in, show user info and logout button
+        if check_login_status():
+            st.markdown(f"""
+            <div class="card-container">
+                <p><b>Welcome, {st.session_state.current_user.get('name', 'User')}!</b></p>
+                <p>Email: {st.session_state.current_user.get('email', 'N/A')}</p>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            if st.button("Logout"):
+                logout()
+        
         # Show recent reviews
         if st.session_state.reviews:
             st.header("Recent Feedback")
@@ -566,186 +852,257 @@ def main():
                         st.markdown(f"**Sentiment**: {animated_stars}", unsafe_allow_html=True)
                     else:
                         st.write(f"**Sentiment**: {sentiment}/5")    
-    # Main content tabs
-    tab1, tab2 = st.tabs(["📝 Leave Feedback", "📋 View All Feedback"])
     
-    # Feedback tab
-    with tab1:
-        st.markdown("""
-        <h2 style="color: #5a7d7c;">Share Your Experience</h2>
-        <p>Please tell us about your dining experience at our restaurant.</p>
-        """, unsafe_allow_html=True)
+    # Check if user is logged in before showing main content
+    if not check_login_status():
+        # User is not logged in, show login form
+        render_login_form()
         
-        # Collect customer information
-        collect_customer_info()
-            
-        col1, col2 = st.columns(2)
+        if st.session_state.register_success:
+            st.success(st.session_state.register_success)
+    else:
+        # User is logged in, show main content
         
-        # Left column - Audio recording
-        with col1:
-            st.markdown('<div class="card-container">', unsafe_allow_html=True)
+        # Main content tabs - conditionally create tabs based on owner status
+        if st.session_state.is_owner:
+            # Show all tabs for owner
+            tab1, tab2, tab3 = st.tabs(["📝 Leave Feedback", "📋 View All Feedback", "👤 My Feedback"])
+        else:
+            # Show only Leave Feedback and My Feedback tabs for regular users
+            tab1, tab3 = st.tabs(["📝 Leave Feedback", "👤 My Feedback"])
+        
+        # Feedback tab
+        with tab1:
+            st.markdown("""
+            <h2 style="color: #5a7d7c;">Share Your Experience</h2>
+            <p>Please tell us about your dining experience at our restaurant.</p>
+            """, unsafe_allow_html=True)
             
-            # Show recording UI if not showing analysis
-            if not st.session_state.show_analysis:
-                audio_file = record_audio()
-            
-            st.markdown('</div>', unsafe_allow_html=True)
-
-        # Display analysis and save options
-        if st.session_state.show_analysis and st.session_state.current_analysis:
-            with col1:
-                display_analysis(st.session_state.current_analysis)
+            # Collect customer information
+            collect_customer_info()
                 
-                # Save/Cancel buttons
-                col_save, col_cancel = st.columns(2)
-                with col_save:
-                    if st.button("💾 Save Feedback"):
-                        if save_review(st.session_state.current_analysis):
-                            st.success("Thank you! Your feedback has been saved.")
+            col1, col2 = st.columns(2)
+            
+            # Left column - Audio recording
+            with col1:
+                st.markdown('<div class="card-container">', unsafe_allow_html=True)
+                
+                # Show recording UI if not showing analysis
+                if not st.session_state.show_analysis:
+                    audio_file = record_audio()
+                
+                st.markdown('</div>', unsafe_allow_html=True)
+
+            # Display analysis and save options
+            if st.session_state.show_analysis and st.session_state.current_analysis:
+                with col1:
+                    display_analysis(st.session_state.current_analysis)
+                    
+                    # Save/Cancel buttons
+                    col_save, col_cancel = st.columns(2)
+                    with col_save:
+                        if st.button("💾 Save Feedback"):
+                            if save_review(st.session_state.current_analysis):
+                                st.success("Thank you! Your feedback has been saved.")
+                                # Reset states
+                                st.session_state.audio_file = None
+                                st.session_state.show_analysis = False
+                                st.session_state.current_analysis = None
+                                st.session_state.is_recording = False
+                                st.rerun()
+                    
+                    with col_cancel:
+                        if st.button("↩️ Start Over"):
                             # Reset states
                             st.session_state.audio_file = None
                             st.session_state.show_analysis = False
                             st.session_state.current_analysis = None
                             st.session_state.is_recording = False
+                            st.session_state.record_again = True
                             st.rerun()
-                
-                with col_cancel:
-                    if st.button("↩️ Start Over"):
-                        # Reset states
-                        st.session_state.audio_file = None
-                        st.session_state.show_analysis = False
-                        st.session_state.current_analysis = None
-                        st.session_state.is_recording = False
-                        st.session_state.record_again = True
-                        st.rerun()
 
-        # Text input - Right column
-        with col2:
-            if not st.session_state.show_analysis:
-                st.markdown('<div class="card-container">', unsafe_allow_html=True)
-                st.write("**Or type your feedback:**")
-                text_feedback = st.text_area("Your feedback", height=150)
-                
-                if st.button("📝 Submit Written Feedback"):
-                    if text_feedback:
-                        with st.spinner("Analyzing your feedback..."):
-                            review_analysis, validation_error = process_and_validate_review(text_feedback)
-                        
-                        if validation_error:
-                            st.error(validation_error)
-                            st.info("Please provide more details about your restaurant experience.")
-                        elif review_analysis:
-                            st.success("Analysis complete!")
-                            st.session_state.current_analysis = review_analysis
-                            st.session_state.show_analysis = True
-                            st.rerun()
-                    else:
-                        st.warning("Please enter your feedback before submitting.")
-                st.markdown('</div>', unsafe_allow_html=True)
-
-    # View all feedback tab
-    with tab2:
-        st.markdown('<h2 style="color: #5a7d7c;">All Feedback</h2>', unsafe_allow_html=True)
-        
-        # Load latest reviews
-        all_reviews = load_reviews_from_db()
-        
-        if not all_reviews:
-            st.info("No feedback has been submitted yet.")
-        else:
-            # Sort reviews by timestamp
-            sorted_reviews = sorted(all_reviews, key=lambda x: x.get('timestamp', ''), reverse=True)
-            
-            # Filter controls
-            st.markdown('<div class="card-container">', unsafe_allow_html=True)
-            search_input = st.text_input("Search reviews by keyword:")
-            
-            # Sentiment filter
-            sentiment_options = ["All"] + [str(i) for i in range(1, 6)]
-            selected_sentiment = st.selectbox("Filter by sentiment score:", sentiment_options)
-            
-            # Date filter
-            col_date1, col_date2 = st.columns(2)
-            with col_date1:
-                # Get min date
-                dates = [datetime.fromisoformat(r.get('timestamp', datetime.now().isoformat())) 
-                        for r in all_reviews if 'timestamp' in r]
-                min_date = min(dates).date() if dates else datetime.now().date()
-                start_date = st.date_input("From date:", min_date)
-            
-            with col_date2:
-                max_date = max(dates).date() if dates else datetime.now().date()
-                end_date = st.date_input("To date:", max_date)
-            st.markdown('</div>', unsafe_allow_html=True)
-            
-            # Apply filters
-            filtered_reviews = []
-            for review in sorted_reviews:
-                # Filter by sentiment
-                if selected_sentiment != "All":
-                    sentiment_score = review.get('sentiment_score', None)
-                    if sentiment_score != float(selected_sentiment) and sentiment_score != int(selected_sentiment):
-                        continue
-                
-                # Filter by date
-                if 'timestamp' in review:
-                    try:
-                        review_date = datetime.fromisoformat(review['timestamp']).date()
-                        if review_date < start_date or review_date > end_date:
-                            continue
-                    except:
-                        pass
-                
-                # Add to filtered list
-                filtered_reviews.append(review)
-            
-            # Display count
-            st.write(f"Showing {len(filtered_reviews)} out of {len(all_reviews)} total reviews")
-            
-            # Display filtered reviews
-            for review in filtered_reviews:
-                display_date = format_date(review.get('timestamp', 'Unknown date'))
-
-                with st.expander(f"Review from {display_date}"):
+            # Text input - Right column
+            with col2:
+                if not st.session_state.show_analysis:
                     st.markdown('<div class="card-container">', unsafe_allow_html=True)
+                    st.write("**Or type your feedback:**")
+                    text_feedback = st.text_area("Your feedback", height=150)
                     
-                    # Customer info
-                    if review.get('customer_name'):
-                        st.write(f"**Customer**: {review['customer_name']}")
-                    if review.get('customer_email'):
-                        st.write(f"**Email**: {review['customer_email']}")
-                    if review.get('customer_phone'):
-                        st.write(f"**Phone**: {review['customer_phone']}")
-                    
-                    # Review details
-                    st.write(f"**Summary**: {review.get('summary', 'N/A')}")
-                    st.write(f"**Food Quality**: {review.get('food_quality', 'N/A')}")
-                    st.write(f"**Service**: {review.get('service', 'N/A')}")
-                    st.write(f"**Atmosphere**: {review.get('atmosphere', 'N/A')}")
-                    
-                    # Sentiment display with animated stars
-                    sentiment = review.get('sentiment_score', 'N/A')
-                    if isinstance(sentiment, (int, float)):
-                        animated_stars = display_animated_stars(sentiment, show_number=True)
-                        st.markdown(f"**Sentiment Score**: {animated_stars}", unsafe_allow_html=True)
-                    else:
-                        st.write(f"**Sentiment Score**: {sentiment}/5")                    
-                    # Display key points
-                    if 'specific_points' in review:
-                        st.write("**Key Points:**")
-                        display_list_items(review.get('specific_points', []))
-
-                    # Display suggestions
-                    if 'improvement_suggestions' in review:
-                        st.write("**Suggestions for Improvement:**")
-                        display_list_items(review.get('improvement_suggestions', []))
-                        
-                    # Show transcription
-                    if 'raw_transcription' in review:
-                        st.write("**Original Transcription:**")
-                        st.text(review['raw_transcription'])
-                    
+                    if st.button("📝 Submit Written Feedback"):
+                        if text_feedback:
+                            with st.spinner("Analyzing your feedback..."):
+                                review_analysis, validation_error = process_and_validate_review(text_feedback)
+                            
+                            if validation_error:
+                                st.error(validation_error)
+                                st.info("Please provide more details about your restaurant experience.")
+                            elif review_analysis:
+                                st.success("Analysis complete!")
+                                st.session_state.current_analysis = review_analysis
+                                st.session_state.show_analysis = True
+                                st.rerun()
+                        else:
+                            st.warning("Please enter your feedback before submitting.")
                     st.markdown('</div>', unsafe_allow_html=True)
+
+        # View all feedback tab
+        if st.session_state.is_owner:
+            with tab2:
+                st.markdown('<h2 style="color: #5a7d7c;">All Feedback</h2>', unsafe_allow_html=True)
+                
+                # Load latest reviews
+                all_reviews = load_reviews_from_db()
+                
+                if not all_reviews:
+                    st.info("No feedback has been submitted yet.")
+                else:
+                    # Sort reviews by timestamp
+                    sorted_reviews = sorted(all_reviews, key=lambda x: x.get('timestamp', ''), reverse=True)
+                    
+                    # Filter controls
+                    st.markdown('<div class="card-container">', unsafe_allow_html=True)
+                    search_input = st.text_input("Search reviews by keyword:")
+                    
+                    # Sentiment filter
+                    sentiment_options = ["All"] + [str(i) for i in range(1, 6)]
+                    selected_sentiment = st.selectbox("Filter by sentiment score:", sentiment_options)
+                    
+                    # Date filter
+                    col_date1, col_date2 = st.columns(2)
+                    with col_date1:
+                        # Get min date
+                        dates = [datetime.fromisoformat(r.get('timestamp', datetime.now().isoformat())) 
+                                for r in all_reviews if 'timestamp' in r]
+                        min_date = min(dates).date() if dates else datetime.now().date()
+                        start_date = st.date_input("From date:", min_date)
+                    
+                    with col_date2:
+                        max_date = max(dates).date() if dates else datetime.now().date()
+                        end_date = st.date_input("To date:", max_date)
+                    st.markdown('</div>', unsafe_allow_html=True)
+                    
+                    # Apply filters
+                    filtered_reviews = []
+                    for review in sorted_reviews:
+                        # Filter by sentiment
+                        if selected_sentiment != "All":
+                            sentiment_score = review.get('sentiment_score', None)
+                            if sentiment_score != float(selected_sentiment) and sentiment_score != int(selected_sentiment):
+                                continue
+                        
+                        # Filter by date
+                        if 'timestamp' in review:
+                            try:
+                                review_date = datetime.fromisoformat(review['timestamp']).date()
+                                if review_date < start_date or review_date > end_date:
+                                    continue
+                            except:
+                                pass
+                        
+                        # Add to filtered list
+                        filtered_reviews.append(review)
+                    
+                    # Display count
+                    st.write(f"Showing {len(filtered_reviews)} out of {len(all_reviews)} total reviews")
+                    
+                    # Display filtered reviews
+                    for review in filtered_reviews:
+                        display_date = format_date(review.get('timestamp', 'Unknown date'))
+
+                        with st.expander(f"Review from {display_date}"):
+                            st.markdown('<div class="card-container">', unsafe_allow_html=True)
+                            
+                            # Customer info
+                            if review.get('customer_name'):
+                                st.write(f"**Customer**: {review['customer_name']}")
+                            if review.get('customer_email'):
+                                st.write(f"**Email**: {review['customer_email']}")
+                            if review.get('customer_phone'):
+                                st.write(f"**Phone**: {review['customer_phone']}")
+                            
+                            # Review details
+                            st.write(f"**Summary**: {review.get('summary', 'N/A')}")
+                            st.write(f"**Food Quality**: {review.get('food_quality', 'N/A')}")
+                            st.write(f"**Service**: {review.get('service', 'N/A')}")
+                            st.write(f"**Atmosphere**: {review.get('atmosphere', 'N/A')}")
+                            
+                            # Sentiment display with animated stars
+                            sentiment = review.get('sentiment_score', 'N/A')
+                            if isinstance(sentiment, (int, float)):
+                                animated_stars = display_animated_stars(sentiment, show_number=True)
+                                st.markdown(f"**Sentiment Score**: {animated_stars}", unsafe_allow_html=True)
+                            else:
+                                st.write(f"**Sentiment Score**: {sentiment}/5")                    
+                            # Display key points
+                            if 'specific_points' in review:
+                                st.write("**Key Points:**")
+                                display_list_items(review.get('specific_points', []))
+
+                            # Display suggestions
+                            if 'improvement_suggestions' in review:
+                                st.write("**Suggestions for Improvement:**")
+                                display_list_items(review.get('improvement_suggestions', []))
+                                
+                            # Show transcription
+                            if 'raw_transcription' in review:
+                                st.write("**Original Transcription:**")
+                                st.text(review['raw_transcription'])
+                            
+                            st.markdown('</div>', unsafe_allow_html=True)
+        
+        # My Feedback tab (NEW)
+        with tab3:
+            st.markdown('<h2 style="color: #5a7d7c;">My Feedback History</h2>', unsafe_allow_html=True)
+            
+            # Get user reviews
+            user_id = st.session_state.customer_id
+            user_reviews = get_user_reviews(user_id)
+            
+            if not user_reviews:
+                st.info("You haven't submitted any feedback yet.")
+            else:
+                # Sort reviews by timestamp
+                sorted_user_reviews = sorted(user_reviews, key=lambda x: x.get('timestamp', ''), reverse=True)
+                
+                st.write(f"You have submitted {len(sorted_user_reviews)} reviews.")
+                
+                # Display user reviews
+                for i, review in enumerate(sorted_user_reviews):
+                    display_date = format_date(review.get('timestamp', 'Unknown date'))
+
+                    with st.expander(f"Review {i+1} - {display_date}"):
+                        st.markdown('<div class="card-container">', unsafe_allow_html=True)
+                        
+                        # Review details
+                        st.write(f"**Summary**: {review.get('summary', 'N/A')}")
+                        st.write(f"**Food Quality**: {review.get('food_quality', 'N/A')}")
+                        st.write(f"**Service**: {review.get('service', 'N/A')}")
+                        st.write(f"**Atmosphere**: {review.get('atmosphere', 'N/A')}")
+                        
+                        # Sentiment display with animated stars
+                        sentiment = review.get('sentiment_score', 'N/A')
+                        if isinstance(sentiment, (int, float)):
+                            animated_stars = display_animated_stars(sentiment, show_number=True)
+                            st.markdown(f"**Sentiment Score**: {animated_stars}", unsafe_allow_html=True)
+                        else:
+                            st.write(f"**Sentiment Score**: {sentiment}/5")                    
+                        
+                        # Display key points
+                        if 'specific_points' in review:
+                            st.write("**Key Points:**")
+                            display_list_items(review.get('specific_points', []))
+
+                        # Display suggestions
+                        if 'improvement_suggestions' in review:
+                            st.write("**Suggestions for Improvement:**")
+                            display_list_items(review.get('improvement_suggestions', []))
+                            
+                        # Show transcription
+                        if 'raw_transcription' in review:
+                            st.write("**Original Transcription:**")
+                            st.text(review['raw_transcription'])
+                        
+                        st.markdown('</div>', unsafe_allow_html=True)
 
 if __name__ == "__main__":
     main()
