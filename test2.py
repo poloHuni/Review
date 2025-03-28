@@ -164,6 +164,8 @@ def init_session_state():
         st.session_state.is_recording = False
     if 'record_again' not in st.session_state:
         st.session_state.record_again = False
+    if 'recording_initialized' not in st.session_state:  # Add this new line
+        st.session_state.recording_initialized = False
     if 'customer_info' not in st.session_state:
         st.session_state.customer_info = {"name": "", "email": "", "phone": ""}
     # New session state variables for login system
@@ -448,37 +450,51 @@ def record_audio():
     recorder_container = st.empty()
     process_container = st.empty()
     
+    # Initialize recording state if not already present
+    if 'recording_initialized' not in st.session_state:
+        st.session_state.recording_initialized = False
+    
     # Handle "Record Again" flow
     if st.session_state.record_again:
         st.session_state.record_again = False
+        st.session_state.recording_initialized = True
         st.rerun()
     
     # Show instruction
     instruction_container.markdown("""
     <div style="padding: 15px; border: 1px solid #ddd; border-radius: 10px; margin-bottom: 10px;">
-        <p>🎙️ Click and HOLD the microphone button while speaking. Release when done (max 25 sec)</p>
+        <p>🎙️ Click the microphone to start/stop recording your feedback (max 25 sec)</p>
     </div>
     """, unsafe_allow_html=True)
     
     # Only show recorder if we don't have audio already recorded
     if not hasattr(st.session_state, 'audio_file') or st.session_state.audio_file is None:
-        # Show recorder
+        # Show recorder with consistent behavior
         with recorder_container:
+            # Use the same parameters as in the rerecord experience
             audio_bytes = audio_recorder(
-                text="Press and hold to record",
+                text="Click to record",
                 recording_color="#e53935",
                 neutral_color="#5a7d7c",
                 icon_name="microphone",
                 pause_threshold=25.0,
-                energy_threshold=0.01,  # Lower threshold for mobile mics
-                sample_rate=44100      # Standard sample rate
+                # These parameters help with consistent behavior
+                energy_threshold=0.01,
+                sample_rate=44100,
+                # Force the recorder to be in the reinitialized state
+                key=f"audio_recorder_{st.session_state.recording_initialized}"
             )
         
+        # If this is the first load but not a rerecord, initialize recording state
+        if not st.session_state.recording_initialized:
+            st.session_state.recording_initialized = True
+            st.rerun()
+            
         # Process recorded audio
         if audio_bytes:
-            # Check if the recording has enough data
-            if len(audio_bytes) < 1000:  # If recording is too short (less than ~0.1 seconds)
-                instruction_container.warning("Recording was too short. Please press and HOLD the mic button while speaking.")
+            # Add a check to ensure we have enough data
+            if len(audio_bytes) < 500:  # Less strict threshold since we're not relying on hold
+                instruction_container.warning("Recording was too short. Please try again and speak clearly.")
             else:
                 timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
                 filename = f"review_{st.session_state.customer_id}_{timestamp}.wav"
@@ -531,7 +547,7 @@ def record_audio():
                 st.rerun()
     
     return None
-
+    
 def process_review(transcribed_text):
     if not transcribed_text:
         return None
