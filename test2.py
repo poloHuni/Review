@@ -456,7 +456,7 @@ def record_audio():
     # Show instruction
     instruction_container.markdown("""
     <div style="padding: 15px; border: 1px solid #ddd; border-radius: 10px; margin-bottom: 10px;">
-        <p>🎙️ Click the microphone to start/stop recording your feedback (max 25 sec)</p>
+        <p>🎙️ Click and HOLD the microphone button while speaking. Release when done (max 25 sec)</p>
     </div>
     """, unsafe_allow_html=True)
     
@@ -465,24 +465,30 @@ def record_audio():
         # Show recorder
         with recorder_container:
             audio_bytes = audio_recorder(
-                text="Click to record",
+                text="Press and hold to record",
                 recording_color="#e53935",
                 neutral_color="#5a7d7c",
                 icon_name="microphone",
-                pause_threshold=25.0
+                pause_threshold=25.0,
+                energy_threshold=0.01,  # Lower threshold for mobile mics
+                sample_rate=44100      # Standard sample rate
             )
         
         # Process recorded audio
         if audio_bytes:
-            timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
-            filename = f"review_{st.session_state.customer_id}_{timestamp}.wav"
-            
-            with open(filename, "wb") as f:
-                f.write(audio_bytes)
-            
-            st.session_state.audio_file = filename
-            instruction_container.success("Recording completed!")
-            st.rerun()  # Force a rerun to update UI
+            # Check if the recording has enough data
+            if len(audio_bytes) < 1000:  # If recording is too short (less than ~0.1 seconds)
+                instruction_container.warning("Recording was too short. Please press and HOLD the mic button while speaking.")
+            else:
+                timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+                filename = f"review_{st.session_state.customer_id}_{timestamp}.wav"
+                
+                with open(filename, "wb") as f:
+                    f.write(audio_bytes)
+                
+                st.session_state.audio_file = filename
+                instruction_container.success("Recording completed!")
+                st.rerun()  # Force a rerun to update UI
     else:
         # We have a recording, show buttons and hide recorder
         instruction_container.success("Recording completed!")
