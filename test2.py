@@ -460,60 +460,69 @@ def record_audio():
     </div>
     """, unsafe_allow_html=True)
     
-    # Show recorder
-    with recorder_container:
-        audio_bytes = audio_recorder(
-            text="Click to record",
-            recording_color="#e53935",
-            neutral_color="#5a7d7c",
-            icon_name="microphone",
-            pause_threshold=25.0
-        )
-    
-    # Process recorded audio
-    if audio_bytes:
-        timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
-        filename = f"review_{st.session_state.customer_id}_{timestamp}.wav"
+    # Only show recorder if we don't have audio already recorded
+    if not hasattr(st.session_state, 'audio_file') or st.session_state.audio_file is None:
+        # Show recorder
+        with recorder_container:
+            audio_bytes = audio_recorder(
+                text="Click to record",
+                recording_color="#e53935",
+                neutral_color="#5a7d7c",
+                icon_name="microphone",
+                pause_threshold=25.0
+            )
         
-        with open(filename, "wb") as f:
-            f.write(audio_bytes)
-        
-        st.session_state.audio_file = filename
+        # Process recorded audio
+        if audio_bytes:
+            timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+            filename = f"review_{st.session_state.customer_id}_{timestamp}.wav"
+            
+            with open(filename, "wb") as f:
+                f.write(audio_bytes)
+            
+            st.session_state.audio_file = filename
+            instruction_container.success("Recording completed!")
+            st.rerun()  # Force a rerun to update UI
+    else:
+        # We have a recording, show buttons and hide recorder
         instruction_container.success("Recording completed!")
         
         # Process button
-        if process_container.button("✅ Process Recording", key="process_audio_btn"):
-            with st.spinner("Transcribing your feedback..."):
-                transcribed_text = transcribe_audio(filename)
-                
-            if transcribed_text:
-                with st.spinner("Analyzing your feedback..."):
-                    review_analysis = process_review(transcribed_text)
+        col1, col2 = process_container.columns(2)
+        with col1:
+            if st.button("✅ Process Recording", key="process_audio_btn"):
+                with st.spinner("Transcribing your feedback..."):
+                    transcribed_text = transcribe_audio(st.session_state.audio_file)
                     
-                if review_analysis:
-                    st.session_state.current_analysis = review_analysis
-                    st.session_state.show_analysis = True
-                    st.rerun()
+                if transcribed_text:
+                    with st.spinner("Analyzing your feedback..."):
+                        review_analysis = process_review(transcribed_text)
+                        
+                    if review_analysis:
+                        st.session_state.current_analysis = review_analysis
+                        st.session_state.show_analysis = True
+                        st.rerun()
+                    else:
+                        st.error("Failed to analyze your feedback. Please try again.")
                 else:
-                    st.error("Failed to analyze your feedback. Please try again.")
-            else:
-                st.error("Failed to transcribe your audio. Please try again.")
+                    st.error("Failed to transcribe your audio. Please try again.")
         
         # Record again button
-        if st.button("🔄 Record Again", key="record_again_btn"):
-            if os.path.exists(filename):
-                try:
-                    os.remove(filename)
-                except:
-                    pass
-                    
-            # Reset states
-            st.session_state.audio_file = None
-            st.session_state.show_analysis = False
-            st.session_state.current_analysis = None
-            st.session_state.is_recording = False
-            st.session_state.record_again = True
-            st.rerun()
+        with col2:
+            if st.button("🔄 Record Again", key="record_again_btn"):
+                if os.path.exists(st.session_state.audio_file):
+                    try:
+                        os.remove(st.session_state.audio_file)
+                    except:
+                        pass
+                        
+                # Reset states
+                st.session_state.audio_file = None
+                st.session_state.show_analysis = False
+                st.session_state.current_analysis = None
+                st.session_state.is_recording = False
+                st.session_state.record_again = True
+                st.rerun()
     
     return None
 
@@ -862,15 +871,13 @@ def main():
             st.success(st.session_state.register_success)
     else:
         # User is logged in, show main content
-        
-        # Main content tabs - conditionally create tabs based on owner status
         if st.session_state.is_owner:
             # Show all tabs for owner
             tab1, tab2, tab3 = st.tabs(["📝 Leave Feedback", "📋 View All Feedback", "👤 My Feedback"])
         else:
             # Show only Leave Feedback and My Feedback tabs for regular users
             tab1, tab3 = st.tabs(["📝 Leave Feedback", "👤 My Feedback"])
-        
+
         # Feedback tab
         with tab1:
             st.markdown("""
