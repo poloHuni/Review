@@ -7,3 +7,4 @@ streamlit==1.42.1
 langchain-community==0.3.17
 openpyxl==3.1.5
 extra-streamlit-components==0.1.71
+openai==1.63.2
