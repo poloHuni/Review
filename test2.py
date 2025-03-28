@@ -164,8 +164,6 @@ def init_session_state():
         st.session_state.is_recording = False
     if 'record_again' not in st.session_state:
         st.session_state.record_again = False
-    if 'recording_started' not in st.session_state:  # Add this new line
-        st.session_state.recording_started = False
     if 'customer_info' not in st.session_state:
         st.session_state.customer_info = {"name": "", "email": "", "phone": ""}
     # New session state variables for login system
@@ -458,42 +456,39 @@ def record_audio():
     # Show instruction
     instruction_container.markdown("""
     <div style="padding: 15px; border: 1px solid #ddd; border-radius: 10px; margin-bottom: 10px;">
-        <p>🎙️ Click the microphone to start/stop recording your feedback (max 25 sec)</p>
+        <p>🎙️ Click and HOLD the microphone button while speaking. Release when done (max 25 sec)</p>
     </div>
     """, unsafe_allow_html=True)
     
     # Only show recorder if we don't have audio already recorded
     if not hasattr(st.session_state, 'audio_file') or st.session_state.audio_file is None:
-        # Show recorder with mobile-friendly settings
+        # Show recorder
         with recorder_container:
             audio_bytes = audio_recorder(
-                text="Click to record",
+                text="Press and hold to record",
                 recording_color="#e53935",
                 neutral_color="#5a7d7c",
                 icon_name="microphone",
                 pause_threshold=25.0,
-                # Add these parameters for mobile compatibility
-                energy_threshold=0.01,  # Lower energy threshold to be more sensitive
-                sample_rate=44100,      # Standard sample rate
-                block_size=512,         # Smaller block size for more frequent updates
-                channels=1              # Mono recording is more reliable on mobile
+                energy_threshold=0.01,  # Lower threshold for mobile mics
+                sample_rate=44100      # Standard sample rate
             )
         
-        # Process recorded audio (don't assume immediate completion on mobile)
-        if audio_bytes and len(audio_bytes) > 100:  # Check if we have meaningful audio data
-            timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
-            filename = f"review_{st.session_state.customer_id}_{timestamp}.wav"
-            
-            with open(filename, "wb") as f:
-                f.write(audio_bytes)
-            
-            st.session_state.audio_file = filename
-            instruction_container.success("Recording completed!")
-            st.rerun()  # Force a rerun to update UI
-        elif audio_bytes:
-            # Audio data exists but might be too small - give user feedback
-            instruction_container.warning("Recording seems too short. Please try again and speak clearly.")
-            st.session_state.audio_file = None
+        # Process recorded audio
+        if audio_bytes:
+            # Check if the recording has enough data
+            if len(audio_bytes) < 1000:  # If recording is too short (less than ~0.1 seconds)
+                instruction_container.warning("Recording was too short. Please press and HOLD the mic button while speaking.")
+            else:
+                timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+                filename = f"review_{st.session_state.customer_id}_{timestamp}.wav"
+                
+                with open(filename, "wb") as f:
+                    f.write(audio_bytes)
+                
+                st.session_state.audio_file = filename
+                instruction_container.success("Recording completed!")
+                st.rerun()  # Force a rerun to update UI
     else:
         # We have a recording, show buttons and hide recorder
         instruction_container.success("Recording completed!")
