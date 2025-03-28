@@ -16,6 +16,7 @@ from dotenv import load_dotenv
 import re
 import extra_streamlit_components as stx
 
+OWNER_EMAIL = "natnaelgebremichaeltewelde@gmail.com"
 # Load environment variables
 load_dotenv()
 
@@ -174,7 +175,10 @@ def init_session_state():
         st.session_state.login_error = None
     if 'register_success' not in st.session_state:
         st.session_state.register_success = None
-
+    # Add the is_owner flag
+    if 'is_owner' not in st.session_state:
+        st.session_state.is_owner = False
+        
 # Login form
 def render_login_form():
     st.markdown("""
@@ -204,6 +208,9 @@ def render_login_form():
                 "email": user.get('email', ""),
                 "phone": user.get('phone', "")
             }
+            
+            # Check if this user is the owner
+            st.session_state.is_owner = (user.get('email') == OWNER_EMAIL)
             
             # Update last login time
             user['last_login'] = datetime.now().isoformat()
@@ -295,6 +302,9 @@ def check_login_status():
                 "phone": user.get('phone', "")
             }
             
+            # Check if this user is the owner
+            st.session_state.is_owner = (user.get('email') == OWNER_EMAIL)
+            
             # Update last login time
             user['last_login'] = datetime.now().isoformat()
             save_user(user)
@@ -313,6 +323,7 @@ def logout():
     st.session_state.current_user = None
     st.session_state.customer_id = str(uuid.uuid4())
     st.session_state.customer_info = {"name": "", "email": "", "phone": ""}
+    st.session_state.is_owner = False
     
     st.rerun()
 
@@ -852,8 +863,13 @@ def main():
     else:
         # User is logged in, show main content
         
-        # Main content tabs
-        tab1, tab2, tab3 = st.tabs(["📝 Leave Feedback", "📋 View All Feedback", "👤 My Feedback"])
+        # Main content tabs - conditionally create tabs based on owner status
+        if st.session_state.is_owner:
+            # Show all tabs for owner
+            tab1, tab2, tab3 = st.tabs(["📝 Leave Feedback", "📋 View All Feedback", "👤 My Feedback"])
+        else:
+            # Show only Leave Feedback and My Feedback tabs for regular users
+            tab1, tab3 = st.tabs(["📝 Leave Feedback", "👤 My Feedback"])
         
         # Feedback tab
         with tab1:
@@ -930,108 +946,109 @@ def main():
                     st.markdown('</div>', unsafe_allow_html=True)
 
         # View all feedback tab
-        with tab2:
-            st.markdown('<h2 style="color: #5a7d7c;">All Feedback</h2>', unsafe_allow_html=True)
-            
-            # Load latest reviews
-            all_reviews = load_reviews_from_db()
-            
-            if not all_reviews:
-                st.info("No feedback has been submitted yet.")
-            else:
-                # Sort reviews by timestamp
-                sorted_reviews = sorted(all_reviews, key=lambda x: x.get('timestamp', ''), reverse=True)
+        if st.session_state.is_owner:
+            with tab2:
+                st.markdown('<h2 style="color: #5a7d7c;">All Feedback</h2>', unsafe_allow_html=True)
                 
-                # Filter controls
-                st.markdown('<div class="card-container">', unsafe_allow_html=True)
-                search_input = st.text_input("Search reviews by keyword:")
+                # Load latest reviews
+                all_reviews = load_reviews_from_db()
                 
-                # Sentiment filter
-                sentiment_options = ["All"] + [str(i) for i in range(1, 6)]
-                selected_sentiment = st.selectbox("Filter by sentiment score:", sentiment_options)
-                
-                # Date filter
-                col_date1, col_date2 = st.columns(2)
-                with col_date1:
-                    # Get min date
-                    dates = [datetime.fromisoformat(r.get('timestamp', datetime.now().isoformat())) 
-                            for r in all_reviews if 'timestamp' in r]
-                    min_date = min(dates).date() if dates else datetime.now().date()
-                    start_date = st.date_input("From date:", min_date)
-                
-                with col_date2:
-                    max_date = max(dates).date() if dates else datetime.now().date()
-                    end_date = st.date_input("To date:", max_date)
-                st.markdown('</div>', unsafe_allow_html=True)
-                
-                # Apply filters
-                filtered_reviews = []
-                for review in sorted_reviews:
-                    # Filter by sentiment
-                    if selected_sentiment != "All":
-                        sentiment_score = review.get('sentiment_score', None)
-                        if sentiment_score != float(selected_sentiment) and sentiment_score != int(selected_sentiment):
-                            continue
+                if not all_reviews:
+                    st.info("No feedback has been submitted yet.")
+                else:
+                    # Sort reviews by timestamp
+                    sorted_reviews = sorted(all_reviews, key=lambda x: x.get('timestamp', ''), reverse=True)
                     
-                    # Filter by date
-                    if 'timestamp' in review:
-                        try:
-                            review_date = datetime.fromisoformat(review['timestamp']).date()
-                            if review_date < start_date or review_date > end_date:
+                    # Filter controls
+                    st.markdown('<div class="card-container">', unsafe_allow_html=True)
+                    search_input = st.text_input("Search reviews by keyword:")
+                    
+                    # Sentiment filter
+                    sentiment_options = ["All"] + [str(i) for i in range(1, 6)]
+                    selected_sentiment = st.selectbox("Filter by sentiment score:", sentiment_options)
+                    
+                    # Date filter
+                    col_date1, col_date2 = st.columns(2)
+                    with col_date1:
+                        # Get min date
+                        dates = [datetime.fromisoformat(r.get('timestamp', datetime.now().isoformat())) 
+                                for r in all_reviews if 'timestamp' in r]
+                        min_date = min(dates).date() if dates else datetime.now().date()
+                        start_date = st.date_input("From date:", min_date)
+                    
+                    with col_date2:
+                        max_date = max(dates).date() if dates else datetime.now().date()
+                        end_date = st.date_input("To date:", max_date)
+                    st.markdown('</div>', unsafe_allow_html=True)
+                    
+                    # Apply filters
+                    filtered_reviews = []
+                    for review in sorted_reviews:
+                        # Filter by sentiment
+                        if selected_sentiment != "All":
+                            sentiment_score = review.get('sentiment_score', None)
+                            if sentiment_score != float(selected_sentiment) and sentiment_score != int(selected_sentiment):
                                 continue
-                        except:
-                            pass
+                        
+                        # Filter by date
+                        if 'timestamp' in review:
+                            try:
+                                review_date = datetime.fromisoformat(review['timestamp']).date()
+                                if review_date < start_date or review_date > end_date:
+                                    continue
+                            except:
+                                pass
+                        
+                        # Add to filtered list
+                        filtered_reviews.append(review)
                     
-                    # Add to filtered list
-                    filtered_reviews.append(review)
-                
-                # Display count
-                st.write(f"Showing {len(filtered_reviews)} out of {len(all_reviews)} total reviews")
-                
-                # Display filtered reviews
-                for review in filtered_reviews:
-                    display_date = format_date(review.get('timestamp', 'Unknown date'))
+                    # Display count
+                    st.write(f"Showing {len(filtered_reviews)} out of {len(all_reviews)} total reviews")
+                    
+                    # Display filtered reviews
+                    for review in filtered_reviews:
+                        display_date = format_date(review.get('timestamp', 'Unknown date'))
 
-                    with st.expander(f"Review from {display_date}"):
-                        st.markdown('<div class="card-container">', unsafe_allow_html=True)
-                        
-                        # Customer info
-                        if review.get('customer_name'):
-                            st.write(f"**Customer**: {review['customer_name']}")
-                        if review.get('customer_email'):
-                            st.write(f"**Email**: {review['customer_email']}")
-                        if review.get('customer_phone'):
-                            st.write(f"**Phone**: {review['customer_phone']}")
-                        
-                        # Review details
-                        st.write(f"**Summary**: {review.get('summary', 'N/A')}")
-                        st.write(f"**Food Quality**: {review.get('food_quality', 'N/A')}")
-                        st.write(f"**Service**: {review.get('service', 'N/A')}")
-                        st.write(f"**Atmosphere**: {review.get('atmosphere', 'N/A')}")
-                        
-                        # Sentiment display with animated stars
-                        sentiment = review.get('sentiment_score', 'N/A')
-                        if isinstance(sentiment, (int, float)):
-                            animated_stars = display_animated_stars(sentiment, show_number=True)
-                            st.markdown(f"**Sentiment Score**: {animated_stars}", unsafe_allow_html=True)
-                        else:
-                            st.write(f"**Sentiment Score**: {sentiment}/5")                    
-                        # Display key points
-                        if 'specific_points' in review:
-                            st.write("**Key Points:**")
-                            display_list_items(review.get('specific_points', []))
-
-                        # Display suggestions
-                        if 'improvement_suggestions' in review:
-                            st.write("**Suggestions for Improvement:**")
-                            display_list_items(review.get('improvement_suggestions', []))
+                        with st.expander(f"Review from {display_date}"):
+                            st.markdown('<div class="card-container">', unsafe_allow_html=True)
                             
-                        # Show transcription
-                        if 'raw_transcription' in review:
-                            st.write("**Original Transcription:**")
-                            st.text(review['raw_transcription'])
-                        
-                        st.markdown('</div>', unsafe_allow_html=True)
+                            # Customer info
+                            if review.get('customer_name'):
+                                st.write(f"**Customer**: {review['customer_name']}")
+                            if review.get('customer_email'):
+                                st.write(f"**Email**: {review['customer_email']}")
+                            if review.get('customer_phone'):
+                                st.write(f"**Phone**: {review['customer_phone']}")
+                            
+                            # Review details
+                            st.write(f"**Summary**: {review.get('summary', 'N/A')}")
+                            st.write(f"**Food Quality**: {review.get('food_quality', 'N/A')}")
+                            st.write(f"**Service**: {review.get('service', 'N/A')}")
+                            st.write(f"**Atmosphere**: {review.get('atmosphere', 'N/A')}")
+                            
+                            # Sentiment display with animated stars
+                            sentiment = review.get('sentiment_score', 'N/A')
+                            if isinstance(sentiment, (int, float)):
+                                animated_stars = display_animated_stars(sentiment, show_number=True)
+                                st.markdown(f"**Sentiment Score**: {animated_stars}", unsafe_allow_html=True)
+                            else:
+                                st.write(f"**Sentiment Score**: {sentiment}/5")                    
+                            # Display key points
+                            if 'specific_points' in review:
+                                st.write("**Key Points:**")
+                                display_list_items(review.get('specific_points', []))
+
+                            # Display suggestions
+                            if 'improvement_suggestions' in review:
+                                st.write("**Suggestions for Improvement:**")
+                                display_list_items(review.get('improvement_suggestions', []))
+                                
+                            # Show transcription
+                            if 'raw_transcription' in review:
+                                st.write("**Original Transcription:**")
+                                st.text(review['raw_transcription'])
+                            
+                            st.markdown('</div>', unsafe_allow_html=True)
         
         # My Feedback tab (NEW)
         with tab3:
