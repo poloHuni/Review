@@ -623,16 +623,33 @@ def display_analysis(review_analysis):
         
         st.markdown("</div>", unsafe_allow_html=True)
         
-def collect_customer_info():    
-    customer_name = st.text_input("Name", value=st.session_state.customer_info["name"])
-    customer_email = st.text_input("Email", value=st.session_state.customer_info["email"])
-    customer_phone = st.text_input("Phone", value=st.session_state.customer_info["phone"])
-    
-    # Update customer info
-    st.session_state.customer_info = {
-        "name": customer_name, "email": customer_email, "phone": customer_phone
-    }
-
+def collect_customer_info():
+    # If the user is logged in, display their info without ability to edit
+    if st.session_state.is_logged_in:
+        st.markdown("""
+        <div style="padding: 15px; border: 1px solid #ddd; border-radius: 10px; margin-bottom: 15px;">
+            <h4 style="color: #5a7d7c; margin-top: 0;">Your Information</h4>
+        """, unsafe_allow_html=True)
+        
+        st.write(f"**Name:** {st.session_state.customer_info['name']}")
+        st.write(f"**Email:** {st.session_state.customer_info['email']}")
+        st.write(f"**Phone:** {st.session_state.customer_info['phone'] or 'Not provided'}")
+        
+        # Add edit button that redirects to account settings (optional)
+        if st.button("✏️ Edit Profile"):
+            st.info("To edit your profile information, please contact restaurant management.")
+            
+        st.markdown("</div>", unsafe_allow_html=True)
+    else:
+        # For non-logged in users, allow editing
+        customer_name = st.text_input("Name", value=st.session_state.customer_info["name"])
+        customer_email = st.text_input("Email", value=st.session_state.customer_info["email"])
+        customer_phone = st.text_input("Phone", value=st.session_state.customer_info["phone"])
+        
+        # Update customer info
+        st.session_state.customer_info = {
+            "name": customer_name, "email": customer_email, "phone": customer_phone
+        }
 # CSS for styling
 def load_css():
     st.markdown("""
