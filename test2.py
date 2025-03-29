@@ -21,10 +21,15 @@ OWNER_EMAIL = "natnaelgebremichaeltewelde@gmail.com"
 load_dotenv()
 
 # Database functions
-def load_reviews_from_db():
+def load_reviews_from_db(limit=None):
     try:
         if os.path.exists("restaurant_reviews.xlsx"):
-            return pd.read_excel("restaurant_reviews.xlsx").to_dict(orient='records')
+            df = pd.read_excel("restaurant_reviews.xlsx")
+            reviews = df.to_dict(orient='records')
+            # Sort and apply limit only if specified
+            if limit is not None and reviews:
+                reviews = sorted(reviews, key=lambda x: x.get('timestamp', ''), reverse=True)[:limit]
+            return reviews
         else:
             # Create empty file if doesn't exist
             df = pd.DataFrame(columns=[
@@ -38,7 +43,6 @@ def load_reviews_from_db():
     except Exception as e:
         st.error(f"Error loading reviews database: {str(e)}")
         return []
-
 def save_review(review_data):
     # Add metadata
     review_data.update({
@@ -129,21 +133,59 @@ def save_user(user_data):
         return False
 
 def find_user_by_email(email):
+    # Normalize email to lowercase
+    normalized_email = email.lower().strip()
     users = load_users_from_db()
-    return next((user for user in users if user.get('email') == email), None)
+    return next((user for user in users if user.get('email', '').lower().strip() == normalized_email), None)
 
-def get_user_reviews(user_id):
+def validate_sa_phone_number(phone):
+    """
+    Validate a South African phone number.
+    Returns: (is_valid, formatted_number)
+    """
+    import re
+    
+    if not phone or phone.strip() == "":
+        return True, ""  # Empty phone is allowed
+        
+    # Remove all non-digit characters
+    digits_only = re.sub(r'\D', '', phone)
+    
+    # South African numbers should be 10 digits (excluding country code)
+    if len(digits_only) == 10 and digits_only.startswith('0'):
+        # Format as 0XX XXX XXXX
+        formatted = f"{digits_only[0:3]} {digits_only[3:6]} {digits_only[6:10]}"
+        return True, formatted
+    
+    # Check if it has international code (+27)
+    elif len(digits_only) == 11 and digits_only.startswith('27'):
+        # Convert to local format (0XX XXX XXXX)
+        formatted = f"0{digits_only[2:4]} {digits_only[4:7]} {digits_only[7:11]}"
+        return True, formatted
+    
+    # Check if it has international code with + (+27)
+    elif len(digits_only) == 12 and digits_only.startswith('270'):
+        # Convert to local format (0XX XXX XXXX)
+        formatted = f"0{digits_only[3:5]} {digits_only[5:8]} {digits_only[8:12]}"
+        return True, formatted
+        
+    return False, None
+def get_user_reviews(user_id, limit=None):
     try:
         if os.path.exists("restaurant_reviews.xlsx"):
             df = pd.read_excel("restaurant_reviews.xlsx")
             # Filter reviews by user_id
             user_reviews = df[df['customer_id'] == user_id].to_dict(orient='records')
+            
+            # Sort and limit if specified
+            if limit is not None and user_reviews:
+                user_reviews = sorted(user_reviews, key=lambda x: x.get('timestamp', ''), reverse=True)[:limit]
+                
             return user_reviews
         return []
     except Exception as e:
         st.error(f"Error loading user reviews: {str(e)}")
         return []
-
 # Update these functions in your main application
 def init_session_state():
     if 'memory' not in st.session_state:
@@ -189,7 +231,9 @@ def render_login_form():
     email = st.text_input("Email", key="login_email")
     
     if st.button("Login"):
-        user = find_user_by_email(email)
+        # Normalize email to lowercase for case-insensitive comparison
+        normalized_email = email.lower().strip()
+        user = find_user_by_email(normalized_email)
         cookie_manager = get_cookie_manager()
 
         if user:
@@ -210,7 +254,7 @@ def render_login_form():
             }
             
             # Check if this user is the owner
-            st.session_state.is_owner = (user.get('email') == OWNER_EMAIL)
+            st.session_state.is_owner = (user.get('email', "").lower() == OWNER_EMAIL.lower())
             
             # Update last login time
             user['last_login'] = datetime.now().isoformat()
@@ -232,52 +276,60 @@ def render_login_form():
     with st.form("register_form"):
         name = st.text_input("Full Name")
         email = st.text_input("Email")
-        phone = st.text_input("Phone")
+        phone = st.text_input("Phone (South African format: 0XX XXX XXXX)")
         submit = st.form_submit_button("Register")
         
         if submit:
-            # Check if user already exists
-            existing_user = find_user_by_email(email)
+            # Normalize email
+            normalized_email = email.lower().strip()
+            
+            # Check if user already exists (case insensitive)
+            existing_user = find_user_by_email(normalized_email)
             
             if existing_user:
                 st.error("A user with this email already exists. Please login instead.")
             elif not email or not name:
                 st.error("Name and email are required.")
             else:
-                # Create new user
-                user_id = str(uuid.uuid4())
-                new_user = {
-                    "user_id": user_id,
-                    "username": email.split('@')[0],
-                    "email": email,
-                    "phone": phone,
-                    "name": name,
-                    "last_login": datetime.now().isoformat(),
-                    "registration_date": datetime.now().isoformat()
-                }
+                # Validate phone number
+                is_valid_phone, formatted_phone = validate_sa_phone_number(phone)
                 
-                if save_user(new_user):
-                    # Set cookie
-                    cookie_manager = get_cookie_manager()
-                    cookie_manager.set(
-                        cookie="user_id", 
-                        val=user_id,
-                        expires_at=datetime.now() + timedelta(days=30)
-                    )                    
-                    # Update session state
-                    st.session_state.is_logged_in = True
-                    st.session_state.current_user = new_user
-                    st.session_state.customer_id = user_id
-                    st.session_state.customer_info = {
-                        "name": name,
-                        "email": email,
-                        "phone": phone
-                    }
-                    st.session_state.register_success = "Registration successful!"
-                    st.rerun()
+                if phone and not is_valid_phone:
+                    st.error("Please enter a valid South African phone number (e.g., 071 123 4567 or +27 71 123 4567)")
                 else:
-                    st.error("Error during registration. Please try again.")
-
+                    # Create new user
+                    user_id = str(uuid.uuid4())
+                    new_user = {
+                        "user_id": user_id,
+                        "username": normalized_email.split('@')[0],
+                        "email": normalized_email,  # Store normalized email
+                        "phone": formatted_phone,   # Store formatted phone
+                        "name": name,
+                        "last_login": datetime.now().isoformat(),
+                        "registration_date": datetime.now().isoformat()
+                    }
+                    
+                    if save_user(new_user):
+                        # Set cookie
+                        cookie_manager = get_cookie_manager()
+                        cookie_manager.set(
+                            cookie="user_id", 
+                            val=user_id,
+                            expires_at=datetime.now() + timedelta(days=30)
+                        )                    
+                        # Update session state
+                        st.session_state.is_logged_in = True
+                        st.session_state.current_user = new_user
+                        st.session_state.customer_id = user_id
+                        st.session_state.customer_info = {
+                            "name": name,
+                            "email": normalized_email,
+                            "phone": formatted_phone
+                        }
+                        st.session_state.register_success = "Registration successful!"
+                        st.rerun()
+                    else:
+                        st.error("Error during registration. Please try again.")
 # Check if user is logged in via cookie
 def check_login_status():
     if st.session_state.is_logged_in:
@@ -302,8 +354,8 @@ def check_login_status():
                 "phone": user.get('phone', "")
             }
             
-            # Check if this user is the owner
-            st.session_state.is_owner = (user.get('email') == OWNER_EMAIL)
+            # Check if this user is the owner (case-insensitive comparison)
+            st.session_state.is_owner = (user.get('email', '').lower() == OWNER_EMAIL.lower())
             
             # Update last login time
             user['last_login'] = datetime.now().isoformat()
@@ -312,7 +364,6 @@ def check_login_status():
             return True
     
     return False
-
 # Logout function
 def logout():
     cookie_manager = get_cookie_manager()
@@ -985,8 +1036,12 @@ def main():
             with tab2:
                 st.markdown('<h2 style="color: #5a7d7c;">All Feedback</h2>', unsafe_allow_html=True)
                 
-                # Load latest reviews
-                all_reviews = load_reviews_from_db()
+                # Get total count first for reference
+                all_reviews_total = load_reviews_from_db()
+                total_reviews_count = len(all_reviews_total)
+                
+                # Load only the latest 20 reviews for display
+                all_reviews = load_reviews_from_db(limit=20)
                 
                 if not all_reviews:
                     st.info("No feedback has been submitted yet.")
@@ -1037,8 +1092,11 @@ def main():
                         # Add to filtered list
                         filtered_reviews.append(review)
                     
-                    # Display count
-                    st.write(f"Showing {len(filtered_reviews)} out of {len(all_reviews)} total reviews")
+                    # Display count with message about limit
+                    if total_reviews_count > 20:
+                        st.write(f"Showing up to 20 most recent reviews (out of {total_reviews_count} total)")
+                    else:
+                        st.write(f"Showing {len(filtered_reviews)} out of {total_reviews_count} total reviews")
                     
                     # Display filtered reviews
                     for review in filtered_reviews:
@@ -1085,24 +1143,31 @@ def main():
                             
                             st.markdown('</div>', unsafe_allow_html=True)
         
-        # My Feedback tab (NEW)
+        # My Feedback tab
         with tab3:
             st.markdown('<h2 style="color: #5a7d7c;">My Feedback History</h2>', unsafe_allow_html=True)
             
-            # Get user reviews
+            # Get user ID
             user_id = st.session_state.customer_id
-            user_reviews = get_user_reviews(user_id)
+            
+            # Get total user reviews count for reference
+            all_user_reviews = get_user_reviews(user_id)
+            total_user_reviews_count = len(all_user_reviews)
+            
+            # Get limited user reviews (10 most recent)
+            user_reviews = get_user_reviews(user_id, limit=10)
             
             if not user_reviews:
                 st.info("You haven't submitted any feedback yet.")
             else:
-                # Sort reviews by timestamp
-                sorted_user_reviews = sorted(user_reviews, key=lambda x: x.get('timestamp', ''), reverse=True)
-                
-                st.write(f"You have submitted {len(sorted_user_reviews)} reviews.")
+                # Display count with message about limit
+                if total_user_reviews_count > 10:
+                    st.write(f"Showing your 10 most recent reviews (out of {total_user_reviews_count} total)")
+                else:
+                    st.write(f"You have submitted {total_user_reviews_count} reviews.")
                 
                 # Display user reviews
-                for i, review in enumerate(sorted_user_reviews):
+                for i, review in enumerate(user_reviews):
                     display_date = format_date(review.get('timestamp', 'Unknown date'))
 
                     with st.expander(f"Review {i+1} - {display_date}"):
@@ -1138,6 +1203,5 @@ def main():
                             st.text(review['raw_transcription'])
                         
                         st.markdown('</div>', unsafe_allow_html=True)
-
 if __name__ == "__main__":
     main()
