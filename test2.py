@@ -476,22 +476,28 @@ def record_audio():
         
         # Process recorded audio
         if audio_bytes:
+            # Immediately update UI to show recording completed and waiting message
+            instruction_container.success("Recording completed! Please wait while we prepare your options...")
+            
             # Check if the recording has enough data
             if len(audio_bytes) < 1000:  # If recording is too short (less than ~0.1 seconds)
                 instruction_container.warning("Recording was too short. Please press and HOLD the mic button while speaking.")
             else:
+                # Save audio file in background
                 timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
                 filename = f"review_{st.session_state.customer_id}_{timestamp}.wav"
                 
                 with open(filename, "wb") as f:
                     f.write(audio_bytes)
                 
+                # Update session state
                 st.session_state.audio_file = filename
-                instruction_container.success("Recording completed!")
-                st.rerun()  # Force a rerun to update UI
+                
+                # Save the recording and rerun to display the buttons
+                st.rerun()
     else:
         # We have a recording, show buttons and hide recorder
-        instruction_container.success("Recording completed!")
+        instruction_container.success("Recording completed! Ready for next steps.")
         
         # Process button
         col1, col2 = process_container.columns(2)
