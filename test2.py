@@ -478,8 +478,6 @@ def record_audio():
         if audio_bytes:
             # Immediately update UI to show recording completed and waiting message
             instruction_container.success("Recording completed! Please wait while we prepare your options...")
-            # Show explicit waiting message in the area where buttons will appear
-            process_container.info("Please wait...")
             
             # Check if the recording has enough data
             if len(audio_bytes) < 1000:  # If recording is too short (less than ~0.1 seconds)
