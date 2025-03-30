@@ -451,7 +451,29 @@ def process_and_validate_review(text):
 import os
 import requests
 import streamlit as st
-
+def process_audio_file(input_file_path):
+    """Apply audio processing to improve quality before transcription"""
+    try:
+        from pydub import AudioSegment
+        from pydub.effects import normalize
+        
+        # Load the audio file
+        audio = AudioSegment.from_file(input_file_path, format="wav")
+        
+        # Normalize the volume (makes quiet parts louder and loud parts quieter)
+        normalized_audio = normalize(audio)
+        
+        # Apply noise reduction (simple high-pass filter to reduce low-frequency noise)
+        filtered_audio = normalized_audio.high_pass_filter(80)
+        
+        # Export the processed file
+        processed_file_path = input_file_path.replace(".wav", "_processed.wav")
+        filtered_audio.export(processed_file_path, format="wav")
+        
+        return processed_file_path
+    except Exception as e:
+        st.warning(f"Audio processing failed, using original audio: {str(e)}")
+        return input_file_path
 def transcribe_audio(audio_file_path):
     try:
         # Get API token from environment variable
@@ -496,6 +518,19 @@ def transcribe_audio(audio_file_path):
 
 def record_audio():
     instruction_container = st.empty()
+    # Add recording tips (right after defining instruction_container)
+    st.markdown("""
+    <div class="card-container">
+        <h4 style="color: #5a7d7c; margin-top: 0;">Tips for Better Audio Quality:</h4>
+        <ul>
+            <li>Speak clearly and at a normal pace</li>
+            <li>Keep the microphone 4-6 inches from your mouth</li>
+            <li>Reduce background noise when possible</li>
+            <li>Ensure your device microphone is not covered or obstructed</li>
+            <li>Use headphones with a built-in microphone for better results</li>
+        </ul>
+    </div>
+    """, unsafe_allow_html=True)
     recorder_container = st.empty()
     process_container = st.empty()
     
@@ -507,7 +542,7 @@ def record_audio():
     # Show instruction
     instruction_container.markdown("""
     <div style="padding: 15px; border: 1px solid #ddd; border-radius: 10px; margin-bottom: 10px;">
-        <p>🎙️ Click and HOLD the microphone button while speaking. Release when done (max 25 sec)</p>
+        <p>🎙️ Click the microphone to start recording and click again to stop recording. (max 25 sec)</p>
     </div>
     """, unsafe_allow_html=True)
     
@@ -522,7 +557,7 @@ def record_audio():
                 icon_name="microphone",
                 pause_threshold=25.0,
                 energy_threshold=0.01,  # Lower threshold for mobile mics
-                sample_rate=44100      # Standard sample rate
+                sample_rate=48000      # Standard sample rate
             )
         
         # Process recorded audio
@@ -532,7 +567,7 @@ def record_audio():
             
             # Check if the recording has enough data
             if len(audio_bytes) < 1000:  # If recording is too short (less than ~0.1 seconds)
-                instruction_container.warning("Recording was too short. Please press and HOLD the mic button while speaking.")
+                instruction_container.warning("Recording was too short or unsuccessful. Please click the mic button to re-record. Wait for 5 seconds after stopping recording for next steps")
             else:
                 # Save audio file in background
                 timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
@@ -554,8 +589,12 @@ def record_audio():
         col1, col2 = process_container.columns(2)
         with col1:
             if st.button("✅ Process Recording", key="process_audio_btn"):
+                with st.spinner("Processing and enhancing your audio..."):
+                    # Apply audio processing to improve quality
+                    processed_audio_file = process_audio_file(st.session_state.audio_file)
+                    
                 with st.spinner("Transcribing your feedback..."):
-                    transcribed_text = transcribe_audio(st.session_state.audio_file)
+                    transcribed_text = transcribe_audio(processed_audio_file)
                     
                 if transcribed_text:
                     with st.spinner("Analyzing your feedback..."):
@@ -595,18 +634,20 @@ def process_review(transcribed_text):
     initialize_conversation()
     
     prompt = f"""
-    You are analyzing a customer's restaurant feedback. Please summarize this feedback, 
-    extracting key points about the experience, food quality, service, atmosphere, and any 
-    specific recommendations or complaints. Also rate the overall sentiment on a scale of 1-5.
+    You are analyzing a customer's feedback for a bar and restaurant that features live DJs and music. 
+    Please summarize this feedback, extracting key points about the overall experience, food quality, 
+    service, atmosphere (including music and entertainment), and any specific recommendations or complaints. 
+    Also, rate the overall sentiment on a scale of 1-5.
     
     Customer feedback: {transcribed_text}
     
     Provide your analysis in the following JSON format. Make sure to escape any quotes within the text fields:
     {{
         "summary": "Brief summary of the overall experience",
-        "food_quality": "Assessment of food quality",
+        "food_quality": "Assessment of food and drinks",
         "service": "Assessment of service quality",
-        "atmosphere": "Assessment of restaurant atmosphere",
+        "atmosphere": "Assessment of ambiance, music, and entertainment",
+        "music_and_entertainment": "Specific feedback on DJs, music selection, and overall vibe",
         "specific_points": ["Point 1", "Point 2", "..."],
         "sentiment_score": X,
         "improvement_suggestions": ["Suggestion 1", "Suggestion 2", "..."]
@@ -637,7 +678,6 @@ def process_review(transcribed_text):
             "raw_transcription": transcribed_text,
             "error": "Failed to format response properly"
         }
-
 # UI functions
 def display_analysis(review_analysis):
     with st.container():
@@ -650,6 +690,9 @@ def display_analysis(review_analysis):
         st.write(f"**Food Quality**: {review_analysis.get('food_quality', 'N/A')}")
         st.write(f"**Service**: {review_analysis.get('service', 'N/A')}")
         st.write(f"**Atmosphere**: {review_analysis.get('atmosphere', 'N/A')}")
+        
+        # Add the new field for music and entertainment
+        st.write(f"**Music & Entertainment**: {review_analysis.get('music_and_entertainment', 'N/A')}")
         
         # Sentiment indicator with animated stars
         sentiment = review_analysis.get('sentiment_score', 'N/A')
@@ -672,8 +715,7 @@ def display_analysis(review_analysis):
             for suggestion in review_analysis['improvement_suggestions']:
                 st.markdown(f"<div style='margin-left: 15px;'>• {suggestion}</div>", unsafe_allow_html=True)
         
-        st.markdown("</div>", unsafe_allow_html=True)
-        
+        st.markdown("</div>", unsafe_allow_html=True)        
 def collect_customer_info():
     # If the user is logged in, display their info without ability to edit
     if st.session_state.is_logged_in:
@@ -978,6 +1020,25 @@ def main():
                     audio_file = record_audio()
                 
                 st.markdown('</div>', unsafe_allow_html=True)
+                with st.expander("Having Audio Problems?"):
+                    st.markdown("""
+                    ### Microphone Access
+                    - **Mobile**: Ensure your browser has microphone permissions
+                    - **Desktop**: Check your system's sound settings and browser permissions
+                    - **iOS devices**: Use Safari for best microphone support
+                    - **Android**: Make sure microphone access is enabled for your browser
+                    
+                    ### Audio Quality Issues
+                    - Try moving to a quieter environment
+                    - Speak a bit louder than your normal speaking voice
+                    - Make sure you're not covering the microphone
+                    - On mobile, don't cover the bottom of your device
+                    
+                    ### If Recording Doesn't Work
+                    - Refresh the page and try again
+                    - Try a different browser (Chrome or Safari recommended)
+                    - Consider using the text input method instead
+                    """)
 
             # Display analysis and save options
             if st.session_state.show_analysis and st.session_state.current_analysis:
@@ -1118,6 +1179,8 @@ def main():
                             st.write(f"**Food Quality**: {review.get('food_quality', 'N/A')}")
                             st.write(f"**Service**: {review.get('service', 'N/A')}")
                             st.write(f"**Atmosphere**: {review.get('atmosphere', 'N/A')}")
+                            st.write(f"**Music & Entertainment**: {review.get('music_and_entertainment', 'N/A')}")
+
                             
                             # Sentiment display with animated stars
                             sentiment = review.get('sentiment_score', 'N/A')
@@ -1178,6 +1241,7 @@ def main():
                         st.write(f"**Food Quality**: {review.get('food_quality', 'N/A')}")
                         st.write(f"**Service**: {review.get('service', 'N/A')}")
                         st.write(f"**Atmosphere**: {review.get('atmosphere', 'N/A')}")
+                        st.write(f"**Music & Entertainment**: {review.get('music_and_entertainment', 'N/A')}")
                         
                         # Sentiment display with animated stars
                         sentiment = review.get('sentiment_score', 'N/A')
