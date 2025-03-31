@@ -21,10 +21,15 @@ OWNER_EMAIL = "natnaelgebremichaeltewelde@gmail.com"
 load_dotenv()
 
 # Database functions
-def load_reviews_from_db():
+def load_reviews_from_db(limit=None):
     try:
         if os.path.exists("restaurant_reviews.xlsx"):
-            return pd.read_excel("restaurant_reviews.xlsx").to_dict(orient='records')
+            df = pd.read_excel("restaurant_reviews.xlsx")
+            reviews = df.to_dict(orient='records')
+            # Sort and apply limit only if specified
+            if limit is not None and reviews:
+                reviews = sorted(reviews, key=lambda x: x.get('timestamp', ''), reverse=True)[:limit]
+            return reviews
         else:
             # Create empty file if doesn't exist
             df = pd.DataFrame(columns=[
@@ -38,7 +43,6 @@ def load_reviews_from_db():
     except Exception as e:
         st.error(f"Error loading reviews database: {str(e)}")
         return []
-
 def save_review(review_data):
     # Add metadata
     review_data.update({
@@ -129,21 +133,59 @@ def save_user(user_data):
         return False
 
 def find_user_by_email(email):
+    # Normalize email to lowercase
+    normalized_email = email.lower().strip()
     users = load_users_from_db()
-    return next((user for user in users if user.get('email') == email), None)
+    return next((user for user in users if user.get('email', '').lower().strip() == normalized_email), None)
 
-def get_user_reviews(user_id):
+def validate_sa_phone_number(phone):
+    """
+    Validate a South African phone number.
+    Returns: (is_valid, formatted_number)
+    """
+    import re
+    
+    if not phone or phone.strip() == "":
+        return True, ""  # Empty phone is allowed
+        
+    # Remove all non-digit characters
+    digits_only = re.sub(r'\D', '', phone)
+    
+    # South African numbers should be 10 digits (excluding country code)
+    if len(digits_only) == 10 and digits_only.startswith('0'):
+        # Format as 0XX XXX XXXX
+        formatted = f"{digits_only[0:3]} {digits_only[3:6]} {digits_only[6:10]}"
+        return True, formatted
+    
+    # Check if it has international code (+27)
+    elif len(digits_only) == 11 and digits_only.startswith('27'):
+        # Convert to local format (0XX XXX XXXX)
+        formatted = f"0{digits_only[2:4]} {digits_only[4:7]} {digits_only[7:11]}"
+        return True, formatted
+    
+    # Check if it has international code with + (+27)
+    elif len(digits_only) == 12 and digits_only.startswith('270'):
+        # Convert to local format (0XX XXX XXXX)
+        formatted = f"0{digits_only[3:5]} {digits_only[5:8]} {digits_only[8:12]}"
+        return True, formatted
+        
+    return False, None
+def get_user_reviews(user_id, limit=None):
     try:
         if os.path.exists("restaurant_reviews.xlsx"):
             df = pd.read_excel("restaurant_reviews.xlsx")
             # Filter reviews by user_id
             user_reviews = df[df['customer_id'] == user_id].to_dict(orient='records')
+            
+            # Sort and limit if specified
+            if limit is not None and user_reviews:
+                user_reviews = sorted(user_reviews, key=lambda x: x.get('timestamp', ''), reverse=True)[:limit]
+                
             return user_reviews
         return []
     except Exception as e:
         st.error(f"Error loading user reviews: {str(e)}")
         return []
-
 # Update these functions in your main application
 def init_session_state():
     if 'memory' not in st.session_state:
@@ -189,7 +231,9 @@ def render_login_form():
     email = st.text_input("Email", key="login_email")
     
     if st.button("Login"):
-        user = find_user_by_email(email)
+        # Normalize email to lowercase for case-insensitive comparison
+        normalized_email = email.lower().strip()
+        user = find_user_by_email(normalized_email)
         cookie_manager = get_cookie_manager()
 
         if user:
@@ -210,7 +254,7 @@ def render_login_form():
             }
             
             # Check if this user is the owner
-            st.session_state.is_owner = (user.get('email') == OWNER_EMAIL)
+            st.session_state.is_owner = (user.get('email', "").lower() == OWNER_EMAIL.lower())
             
             # Update last login time
             user['last_login'] = datetime.now().isoformat()
@@ -232,52 +276,60 @@ def render_login_form():
     with st.form("register_form"):
         name = st.text_input("Full Name")
         email = st.text_input("Email")
-        phone = st.text_input("Phone")
+        phone = st.text_input("Phone (South African format: 0XX XXX XXXX)")
         submit = st.form_submit_button("Register")
         
         if submit:
-            # Check if user already exists
-            existing_user = find_user_by_email(email)
+            # Normalize email
+            normalized_email = email.lower().strip()
+            
+            # Check if user already exists (case insensitive)
+            existing_user = find_user_by_email(normalized_email)
             
             if existing_user:
                 st.error("A user with this email already exists. Please login instead.")
             elif not email or not name:
                 st.error("Name and email are required.")
             else:
-                # Create new user
-                user_id = str(uuid.uuid4())
-                new_user = {
-                    "user_id": user_id,
-                    "username": email.split('@')[0],
-                    "email": email,
-                    "phone": phone,
-                    "name": name,
-                    "last_login": datetime.now().isoformat(),
-                    "registration_date": datetime.now().isoformat()
-                }
+                # Validate phone number
+                is_valid_phone, formatted_phone = validate_sa_phone_number(phone)
                 
-                if save_user(new_user):
-                    # Set cookie
-                    cookie_manager = get_cookie_manager()
-                    cookie_manager.set(
-                        cookie="user_id", 
-                        val=user_id,
-                        expires_at=datetime.now() + timedelta(days=30)
-                    )                    
-                    # Update session state
-                    st.session_state.is_logged_in = True
-                    st.session_state.current_user = new_user
-                    st.session_state.customer_id = user_id
-                    st.session_state.customer_info = {
-                        "name": name,
-                        "email": email,
-                        "phone": phone
-                    }
-                    st.session_state.register_success = "Registration successful!"
-                    st.rerun()
+                if phone and not is_valid_phone:
+                    st.error("Please enter a valid South African phone number (e.g., 071 123 4567 or +27 71 123 4567)")
                 else:
-                    st.error("Error during registration. Please try again.")
-
+                    # Create new user
+                    user_id = str(uuid.uuid4())
+                    new_user = {
+                        "user_id": user_id,
+                        "username": normalized_email.split('@')[0],
+                        "email": normalized_email,  # Store normalized email
+                        "phone": formatted_phone,   # Store formatted phone
+                        "name": name,
+                        "last_login": datetime.now().isoformat(),
+                        "registration_date": datetime.now().isoformat()
+                    }
+                    
+                    if save_user(new_user):
+                        # Set cookie
+                        cookie_manager = get_cookie_manager()
+                        cookie_manager.set(
+                            cookie="user_id", 
+                            val=user_id,
+                            expires_at=datetime.now() + timedelta(days=30)
+                        )                    
+                        # Update session state
+                        st.session_state.is_logged_in = True
+                        st.session_state.current_user = new_user
+                        st.session_state.customer_id = user_id
+                        st.session_state.customer_info = {
+                            "name": name,
+                            "email": normalized_email,
+                            "phone": formatted_phone
+                        }
+                        st.session_state.register_success = "Registration successful!"
+                        st.rerun()
+                    else:
+                        st.error("Error during registration. Please try again.")
 # Check if user is logged in via cookie
 def check_login_status():
     if st.session_state.is_logged_in:
@@ -302,8 +354,8 @@ def check_login_status():
                 "phone": user.get('phone', "")
             }
             
-            # Check if this user is the owner
-            st.session_state.is_owner = (user.get('email') == OWNER_EMAIL)
+            # Check if this user is the owner (case-insensitive comparison)
+            st.session_state.is_owner = (user.get('email', '').lower() == OWNER_EMAIL.lower())
             
             # Update last login time
             user['last_login'] = datetime.now().isoformat()
@@ -312,7 +364,6 @@ def check_login_status():
             return True
     
     return False
-
 # Logout function
 def logout():
     cookie_manager = get_cookie_manager()
@@ -400,7 +451,29 @@ def process_and_validate_review(text):
 import os
 import requests
 import streamlit as st
-
+def process_audio_file(input_file_path):
+    """Apply audio processing to improve quality before transcription"""
+    try:
+        from pydub import AudioSegment
+        from pydub.effects import normalize
+        
+        # Load the audio file
+        audio = AudioSegment.from_file(input_file_path, format="wav")
+        
+        # Normalize the volume (makes quiet parts louder and loud parts quieter)
+        normalized_audio = normalize(audio)
+        
+        # Apply noise reduction (simple high-pass filter to reduce low-frequency noise)
+        filtered_audio = normalized_audio.high_pass_filter(80)
+        
+        # Export the processed file
+        processed_file_path = input_file_path.replace(".wav", "_processed.wav")
+        filtered_audio.export(processed_file_path, format="wav")
+        
+        return processed_file_path
+    except Exception as e:
+        st.warning(f"Audio processing failed, using original audio: {str(e)}")
+        return input_file_path
 def transcribe_audio(audio_file_path):
     try:
         # Get API token from environment variable
@@ -445,6 +518,19 @@ def transcribe_audio(audio_file_path):
 
 def record_audio():
     instruction_container = st.empty()
+    # Add recording tips (right after defining instruction_container)
+    st.markdown("""
+    <div class="card-container">
+        <h4 style="color: #5a7d7c; margin-top: 0;">Tips for Better Audio Quality:</h4>
+        <ul>
+            <li>Speak clearly and at a normal pace</li>
+            <li>Keep the microphone 4-6 inches from your mouth</li>
+            <li>Reduce background noise when possible</li>
+            <li>Ensure your device microphone is not covered or obstructed</li>
+            <li>Use headphones with a built-in microphone for better results</li>
+        </ul>
+    </div>
+    """, unsafe_allow_html=True)
     recorder_container = st.empty()
     process_container = st.empty()
     
@@ -456,67 +542,91 @@ def record_audio():
     # Show instruction
     instruction_container.markdown("""
     <div style="padding: 15px; border: 1px solid #ddd; border-radius: 10px; margin-bottom: 10px;">
-        <p>🎙️ Click the microphone to start/stop recording your feedback (max 25 sec)</p>
+        <p>🎙️ Click the microphone to start recording and click again to stop recording. (max 25 sec)</p>
     </div>
     """, unsafe_allow_html=True)
     
-    # Show recorder
-    with recorder_container:
-        audio_bytes = audio_recorder(
-            text="Click to record",
-            recording_color="#e53935",
-            neutral_color="#5a7d7c",
-            icon_name="microphone",
-            pause_threshold=25.0
-        )
-    
-    # Process recorded audio
-    if audio_bytes:
-        timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
-        filename = f"review_{st.session_state.customer_id}_{timestamp}.wav"
+    # Only show recorder if we don't have audio already recorded
+    if not hasattr(st.session_state, 'audio_file') or st.session_state.audio_file is None:
+        # Show recorder
+        with recorder_container:
+            audio_bytes = audio_recorder(
+                text="Press and hold to record",
+                recording_color="#e53935",
+                neutral_color="#5a7d7c",
+                icon_name="microphone",
+                pause_threshold=25.0,
+                energy_threshold=0.01,  # Lower threshold for mobile mics
+                sample_rate=48000      # Standard sample rate
+            )
         
-        with open(filename, "wb") as f:
-            f.write(audio_bytes)
-        
-        st.session_state.audio_file = filename
-        instruction_container.success("Recording completed!")
+        # Process recorded audio
+        if audio_bytes:
+            # Immediately update UI to show recording completed and waiting message
+            instruction_container.success("Recording completed! Please wait while we prepare your options...")
+            
+            # Check if the recording has enough data
+            if len(audio_bytes) < 1000:  # If recording is too short (less than ~0.1 seconds)
+                instruction_container.warning("Recording was too short or unsuccessful. Please click the mic button to re-record. Wait for 5 seconds after stopping recording for next steps")
+            else:
+                # Save audio file in background
+                timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+                filename = f"review_{st.session_state.customer_id}_{timestamp}.wav"
+                
+                with open(filename, "wb") as f:
+                    f.write(audio_bytes)
+                
+                # Update session state
+                st.session_state.audio_file = filename
+                
+                # Save the recording and rerun to display the buttons
+                st.rerun()
+    else:
+        # We have a recording, show buttons and hide recorder
+        instruction_container.success("Recording completed! Ready for next steps.")
         
         # Process button
-        if process_container.button("✅ Process Recording", key="process_audio_btn"):
-            with st.spinner("Transcribing your feedback..."):
-                transcribed_text = transcribe_audio(filename)
-                
-            if transcribed_text:
-                with st.spinner("Analyzing your feedback..."):
-                    review_analysis = process_review(transcribed_text)
+        col1, col2 = process_container.columns(2)
+        with col1:
+            if st.button("✅ Process Recording", key="process_audio_btn"):
+                with st.spinner("Processing and enhancing your audio..."):
+                    # Apply audio processing to improve quality
+                    processed_audio_file = process_audio_file(st.session_state.audio_file)
                     
-                if review_analysis:
-                    st.session_state.current_analysis = review_analysis
-                    st.session_state.show_analysis = True
-                    st.rerun()
+                with st.spinner("Transcribing your feedback..."):
+                    transcribed_text = transcribe_audio(processed_audio_file)
+                    
+                if transcribed_text:
+                    with st.spinner("Analyzing your feedback..."):
+                        review_analysis = process_review(transcribed_text)
+                        
+                    if review_analysis:
+                        st.session_state.current_analysis = review_analysis
+                        st.session_state.show_analysis = True
+                        st.rerun()
+                    else:
+                        st.error("Failed to analyze your feedback. Please try again.")
                 else:
-                    st.error("Failed to analyze your feedback. Please try again.")
-            else:
-                st.error("Failed to transcribe your audio. Please try again.")
+                    st.error("Failed to transcribe your audio. Please try again.")
         
         # Record again button
-        if st.button("🔄 Record Again", key="record_again_btn"):
-            if os.path.exists(filename):
-                try:
-                    os.remove(filename)
-                except:
-                    pass
-                    
-            # Reset states
-            st.session_state.audio_file = None
-            st.session_state.show_analysis = False
-            st.session_state.current_analysis = None
-            st.session_state.is_recording = False
-            st.session_state.record_again = True
-            st.rerun()
+        with col2:
+            if st.button("🔄 Record Again", key="record_again_btn"):
+                if os.path.exists(st.session_state.audio_file):
+                    try:
+                        os.remove(st.session_state.audio_file)
+                    except:
+                        pass
+                        
+                # Reset states
+                st.session_state.audio_file = None
+                st.session_state.show_analysis = False
+                st.session_state.current_analysis = None
+                st.session_state.is_recording = False
+                st.session_state.record_again = True
+                st.rerun()
     
     return None
-
 def process_review(transcribed_text):
     if not transcribed_text:
         return None
@@ -524,18 +634,20 @@ def process_review(transcribed_text):
     initialize_conversation()
     
     prompt = f"""
-    You are analyzing a customer's restaurant feedback. Please summarize this feedback, 
-    extracting key points about the experience, food quality, service, atmosphere, and any 
-    specific recommendations or complaints. Also rate the overall sentiment on a scale of 1-5.
+    You are analyzing a customer's feedback for a bar and restaurant that features live DJs and music. 
+    Please summarize this feedback, extracting key points about the overall experience, food quality, 
+    service, atmosphere (including music and entertainment), and any specific recommendations or complaints. 
+    Also, rate the overall sentiment on a scale of 1-5.
     
     Customer feedback: {transcribed_text}
     
     Provide your analysis in the following JSON format. Make sure to escape any quotes within the text fields:
     {{
         "summary": "Brief summary of the overall experience",
-        "food_quality": "Assessment of food quality",
+        "food_quality": "Assessment of food and drinks",
         "service": "Assessment of service quality",
-        "atmosphere": "Assessment of restaurant atmosphere",
+        "atmosphere": "Assessment of ambiance, music, and entertainment",
+        "music_and_entertainment": "Specific feedback on DJs, music selection, and overall vibe",
         "specific_points": ["Point 1", "Point 2", "..."],
         "sentiment_score": X,
         "improvement_suggestions": ["Suggestion 1", "Suggestion 2", "..."]
@@ -566,7 +678,6 @@ def process_review(transcribed_text):
             "raw_transcription": transcribed_text,
             "error": "Failed to format response properly"
         }
-
 # UI functions
 def display_analysis(review_analysis):
     with st.container():
@@ -579,6 +690,9 @@ def display_analysis(review_analysis):
         st.write(f"**Food Quality**: {review_analysis.get('food_quality', 'N/A')}")
         st.write(f"**Service**: {review_analysis.get('service', 'N/A')}")
         st.write(f"**Atmosphere**: {review_analysis.get('atmosphere', 'N/A')}")
+        
+        # Add the new field for music and entertainment
+        st.write(f"**Music & Entertainment**: {review_analysis.get('music_and_entertainment', 'N/A')}")
         
         # Sentiment indicator with animated stars
         sentiment = review_analysis.get('sentiment_score', 'N/A')
@@ -601,18 +715,34 @@ def display_analysis(review_analysis):
             for suggestion in review_analysis['improvement_suggestions']:
                 st.markdown(f"<div style='margin-left: 15px;'>• {suggestion}</div>", unsafe_allow_html=True)
         
-        st.markdown("</div>", unsafe_allow_html=True)
+        st.markdown("</div>", unsafe_allow_html=True)        
+def collect_customer_info():
+    # If the user is logged in, display their info without ability to edit
+    if st.session_state.is_logged_in:
+        st.markdown("""
+        <div style="padding: 15px; border: 1px solid #ddd; border-radius: 10px; margin-bottom: 15px;">
+            <h4 style="color: #5a7d7c; margin-top: 0;">Your Information</h4>
+        """, unsafe_allow_html=True)
         
-def collect_customer_info():    
-    customer_name = st.text_input("Name", value=st.session_state.customer_info["name"])
-    customer_email = st.text_input("Email", value=st.session_state.customer_info["email"])
-    customer_phone = st.text_input("Phone", value=st.session_state.customer_info["phone"])
-    
-    # Update customer info
-    st.session_state.customer_info = {
-        "name": customer_name, "email": customer_email, "phone": customer_phone
-    }
-
+        st.write(f"**Name:** {st.session_state.customer_info['name']}")
+        st.write(f"**Email:** {st.session_state.customer_info['email']}")
+        st.write(f"**Phone:** {st.session_state.customer_info['phone'] or 'Not provided'}")
+        
+        # Add edit button that redirects to account settings (optional)
+        if st.button("✏️ Edit Profile"):
+            st.info("To edit your profile information, please contact restaurant management.")
+            
+        st.markdown("</div>", unsafe_allow_html=True)
+    else:
+        # For non-logged in users, allow editing
+        customer_name = st.text_input("Name", value=st.session_state.customer_info["name"])
+        customer_email = st.text_input("Email", value=st.session_state.customer_info["email"])
+        customer_phone = st.text_input("Phone", value=st.session_state.customer_info["phone"])
+        
+        # Update customer info
+        st.session_state.customer_info = {
+            "name": customer_name, "email": customer_email, "phone": customer_phone
+        }
 # CSS for styling
 def load_css():
     st.markdown("""
@@ -862,15 +992,13 @@ def main():
             st.success(st.session_state.register_success)
     else:
         # User is logged in, show main content
-        
-        # Main content tabs - conditionally create tabs based on owner status
         if st.session_state.is_owner:
             # Show all tabs for owner
             tab1, tab2, tab3 = st.tabs(["📝 Leave Feedback", "📋 View All Feedback", "👤 My Feedback"])
         else:
             # Show only Leave Feedback and My Feedback tabs for regular users
             tab1, tab3 = st.tabs(["📝 Leave Feedback", "👤 My Feedback"])
-        
+
         # Feedback tab
         with tab1:
             st.markdown("""
@@ -892,6 +1020,25 @@ def main():
                     audio_file = record_audio()
                 
                 st.markdown('</div>', unsafe_allow_html=True)
+                with st.expander("Having Audio Problems?"):
+                    st.markdown("""
+                    ### Microphone Access
+                    - **Mobile**: Ensure your browser has microphone permissions
+                    - **Desktop**: Check your system's sound settings and browser permissions
+                    - **iOS devices**: Use Safari for best microphone support
+                    - **Android**: Make sure microphone access is enabled for your browser
+                    
+                    ### Audio Quality Issues
+                    - Try moving to a quieter environment
+                    - Speak a bit louder than your normal speaking voice
+                    - Make sure you're not covering the microphone
+                    - On mobile, don't cover the bottom of your device
+                    
+                    ### If Recording Doesn't Work
+                    - Refresh the page and try again
+                    - Try a different browser (Chrome or Safari recommended)
+                    - Consider using the text input method instead
+                    """)
 
             # Display analysis and save options
             if st.session_state.show_analysis and st.session_state.current_analysis:
@@ -950,8 +1097,12 @@ def main():
             with tab2:
                 st.markdown('<h2 style="color: #5a7d7c;">All Feedback</h2>', unsafe_allow_html=True)
                 
-                # Load latest reviews
-                all_reviews = load_reviews_from_db()
+                # Get total count first for reference
+                all_reviews_total = load_reviews_from_db()
+                total_reviews_count = len(all_reviews_total)
+                
+                # Load only the latest 20 reviews for display
+                all_reviews = load_reviews_from_db(limit=20)
                 
                 if not all_reviews:
                     st.info("No feedback has been submitted yet.")
@@ -1002,8 +1153,11 @@ def main():
                         # Add to filtered list
                         filtered_reviews.append(review)
                     
-                    # Display count
-                    st.write(f"Showing {len(filtered_reviews)} out of {len(all_reviews)} total reviews")
+                    # Display count with message about limit
+                    if total_reviews_count > 20:
+                        st.write(f"Showing up to 20 most recent reviews (out of {total_reviews_count} total)")
+                    else:
+                        st.write(f"Showing {len(filtered_reviews)} out of {total_reviews_count} total reviews")
                     
                     # Display filtered reviews
                     for review in filtered_reviews:
@@ -1025,6 +1179,8 @@ def main():
                             st.write(f"**Food Quality**: {review.get('food_quality', 'N/A')}")
                             st.write(f"**Service**: {review.get('service', 'N/A')}")
                             st.write(f"**Atmosphere**: {review.get('atmosphere', 'N/A')}")
+                            st.write(f"**Music & Entertainment**: {review.get('music_and_entertainment', 'N/A')}")
+
                             
                             # Sentiment display with animated stars
                             sentiment = review.get('sentiment_score', 'N/A')
@@ -1050,24 +1206,31 @@ def main():
                             
                             st.markdown('</div>', unsafe_allow_html=True)
         
-        # My Feedback tab (NEW)
+        # My Feedback tab
         with tab3:
             st.markdown('<h2 style="color: #5a7d7c;">My Feedback History</h2>', unsafe_allow_html=True)
             
-            # Get user reviews
+            # Get user ID
             user_id = st.session_state.customer_id
-            user_reviews = get_user_reviews(user_id)
+            
+            # Get total user reviews count for reference
+            all_user_reviews = get_user_reviews(user_id)
+            total_user_reviews_count = len(all_user_reviews)
+            
+            # Get limited user reviews (10 most recent)
+            user_reviews = get_user_reviews(user_id, limit=10)
             
             if not user_reviews:
                 st.info("You haven't submitted any feedback yet.")
             else:
-                # Sort reviews by timestamp
-                sorted_user_reviews = sorted(user_reviews, key=lambda x: x.get('timestamp', ''), reverse=True)
-                
-                st.write(f"You have submitted {len(sorted_user_reviews)} reviews.")
+                # Display count with message about limit
+                if total_user_reviews_count > 10:
+                    st.write(f"Showing your 10 most recent reviews (out of {total_user_reviews_count} total)")
+                else:
+                    st.write(f"You have submitted {total_user_reviews_count} reviews.")
                 
                 # Display user reviews
-                for i, review in enumerate(sorted_user_reviews):
+                for i, review in enumerate(user_reviews):
                     display_date = format_date(review.get('timestamp', 'Unknown date'))
 
                     with st.expander(f"Review {i+1} - {display_date}"):
@@ -1078,6 +1241,7 @@ def main():
                         st.write(f"**Food Quality**: {review.get('food_quality', 'N/A')}")
                         st.write(f"**Service**: {review.get('service', 'N/A')}")
                         st.write(f"**Atmosphere**: {review.get('atmosphere', 'N/A')}")
+                        st.write(f"**Music & Entertainment**: {review.get('music_and_entertainment', 'N/A')}")
                         
                         # Sentiment display with animated stars
                         sentiment = review.get('sentiment_score', 'N/A')
@@ -1103,6 +1267,5 @@ def main():
                             st.text(review['raw_transcription'])
                         
                         st.markdown('</div>', unsafe_allow_html=True)
-
 if __name__ == "__main__":
     main()
