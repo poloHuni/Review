@@ -18,9 +18,9 @@ import extra_streamlit_components as stx
 
 # Constants
 OWNER_EMAIL = "natnaelgebremichaeltewelde@gmail.com"
-BRAND_COLOR = "#5a7d7c"
+BRAND_COLOR = "#f8f9fa"
 ACCENT_COLOR = "#e53935"
-LIGHT_COLOR = "#f8f9fa"
+LIGHT_COLOR = "#5a7d7c"
 
 # Load environment variables
 load_dotenv()
