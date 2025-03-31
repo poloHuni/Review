@@ -16,11 +16,16 @@ from dotenv import load_dotenv
 import re
 import extra_streamlit_components as stx
 
+# Constants
 OWNER_EMAIL = "natnaelgebremichaeltewelde@gmail.com"
+BRAND_COLOR = "#5a7d7c"
+ACCENT_COLOR = "#e53935"
+LIGHT_COLOR = "#f8f9fa"
+
 # Load environment variables
 load_dotenv()
 
-# Database functions
+# Database functions (unchanged)
 def load_reviews_from_db(limit=None):
     try:
         if os.path.exists("restaurant_reviews.xlsx"):
@@ -43,6 +48,7 @@ def load_reviews_from_db(limit=None):
     except Exception as e:
         st.error(f"Error loading reviews database: {str(e)}")
         return []
+
 def save_review(review_data):
     # Add metadata
     review_data.update({
@@ -74,7 +80,6 @@ def save_review(review_data):
         st.error(f"Error saving review: {str(e)}")
         return False
 
-# Initialize session state variables
 # Function to get the cookie manager
 def get_cookie_manager():
     """
@@ -89,7 +94,7 @@ def get_cookie_manager():
     # Return the stored instance
     return st.session_state.cookie_manager
 
-# User management functions
+# User management functions (unchanged)
 def load_users_from_db():
     try:
         if os.path.exists("restaurant_users.xlsx"):
@@ -170,6 +175,7 @@ def validate_sa_phone_number(phone):
         return True, formatted
         
     return False, None
+
 def get_user_reviews(user_id, limit=None):
     try:
         if os.path.exists("restaurant_reviews.xlsx"):
@@ -186,6 +192,7 @@ def get_user_reviews(user_id, limit=None):
     except Exception as e:
         st.error(f"Error loading user reviews: {str(e)}")
         return []
+
 # Update these functions in your main application
 def init_session_state():
     if 'memory' not in st.session_state:
@@ -221,115 +228,138 @@ def init_session_state():
     if 'is_owner' not in st.session_state:
         st.session_state.is_owner = False
         
-# Login form
+# Login form - Enhanced with better styling
 def render_login_form():
-    st.markdown("""
-    <h3 style="color: #5a7d7c;">Login</h3>
-    <p>Login to view your previous reviews and submit new ones.</p>
-    """, unsafe_allow_html=True)
-    
-    email = st.text_input("Email", key="login_email")
-    
-    if st.button("Login"):
-        # Normalize email to lowercase for case-insensitive comparison
-        normalized_email = email.lower().strip()
-        user = find_user_by_email(normalized_email)
-        cookie_manager = get_cookie_manager()
-
-        if user:
-            # Set cookie
-            cookie_manager.set(
-                cookie="user_id", 
-                val=user.get('user_id'),
-                expires_at=datetime.now() + timedelta(days=30)
-            )            
-            # Update session state
-            st.session_state.is_logged_in = True
-            st.session_state.current_user = user
-            st.session_state.customer_id = user.get('user_id')
-            st.session_state.customer_info = {
-                "name": user.get('name', ""),
-                "email": user.get('email', ""),
-                "phone": user.get('phone', "")
-            }
-            
-            # Check if this user is the owner
-            st.session_state.is_owner = (user.get('email', "").lower() == OWNER_EMAIL.lower())
-            
-            # Update last login time
-            user['last_login'] = datetime.now().isoformat()
-            save_user(user)
-            
-            st.rerun()
-        else:
-            st.session_state.login_error = "User not found. Please register first."
-    
-    if st.session_state.login_error:
-        st.error(st.session_state.login_error)
-    
-    st.markdown("<hr>", unsafe_allow_html=True)
-    st.markdown("""
-    <h3 style="color: #5a7d7c;">Register</h3>
-    <p>New user? Register to start sharing your feedback.</p>
-    """, unsafe_allow_html=True)
-    
-    with st.form("register_form"):
-        name = st.text_input("Full Name")
-        email = st.text_input("Email")
-        phone = st.text_input("Phone (South African format: 0XX XXX XXXX)")
-        submit = st.form_submit_button("Register")
+    st.markdown(f"""
+    <div class="login-container">
+        <h2 style="color: {BRAND_COLOR}; text-align: center; margin-bottom: 30px;">
+            <span style="font-size: 32px;">👋</span> Welcome to Our Feedback Portal
+        </h2>
         
-        if submit:
-            # Normalize email
-            normalized_email = email.lower().strip()
-            
-            # Check if user already exists (case insensitive)
-            existing_user = find_user_by_email(normalized_email)
-            
-            if existing_user:
-                st.error("A user with this email already exists. Please login instead.")
-            elif not email or not name:
-                st.error("Name and email are required.")
-            else:
-                # Validate phone number
-                is_valid_phone, formatted_phone = validate_sa_phone_number(phone)
+        <div class="login-section">
+            <h3 style="color: {BRAND_COLOR}; font-size: 22px; margin-bottom: 15px;">Login</h3>
+            <p style="margin-bottom: 20px; color: #666;">Access your account to view your previous feedback and submit new reviews.</p>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # Create a card-like container for the login form
+    with st.container():
+        col1, col2, col3 = st.columns([1, 3, 1])
+        with col2:
+            with st.form("login_form", border=False):
+                email = st.text_input("Email Address", key="login_email")
+                submit_login = st.form_submit_button("Login", use_container_width=True)
                 
-                if phone and not is_valid_phone:
-                    st.error("Please enter a valid South African phone number (e.g., 071 123 4567 or +27 71 123 4567)")
-                else:
-                    # Create new user
-                    user_id = str(uuid.uuid4())
-                    new_user = {
-                        "user_id": user_id,
-                        "username": normalized_email.split('@')[0],
-                        "email": normalized_email,  # Store normalized email
-                        "phone": formatted_phone,   # Store formatted phone
-                        "name": name,
-                        "last_login": datetime.now().isoformat(),
-                        "registration_date": datetime.now().isoformat()
-                    }
-                    
-                    if save_user(new_user):
+                if submit_login:
+                    # Normalize email to lowercase for case-insensitive comparison
+                    normalized_email = email.lower().strip()
+                    user = find_user_by_email(normalized_email)
+                    cookie_manager = get_cookie_manager()
+
+                    if user:
                         # Set cookie
-                        cookie_manager = get_cookie_manager()
                         cookie_manager.set(
                             cookie="user_id", 
-                            val=user_id,
+                            val=user.get('user_id'),
                             expires_at=datetime.now() + timedelta(days=30)
-                        )                    
+                        )            
                         # Update session state
                         st.session_state.is_logged_in = True
-                        st.session_state.current_user = new_user
-                        st.session_state.customer_id = user_id
+                        st.session_state.current_user = user
+                        st.session_state.customer_id = user.get('user_id')
                         st.session_state.customer_info = {
-                            "name": name,
-                            "email": normalized_email,
-                            "phone": formatted_phone
+                            "name": user.get('name', ""),
+                            "email": user.get('email', ""),
+                            "phone": user.get('phone', "")
                         }
-                        st.session_state.register_success = "Registration successful!"
+                        
+                        # Check if this user is the owner
+                        st.session_state.is_owner = (user.get('email', "").lower() == OWNER_EMAIL.lower())
+                        
+                        # Update last login time
+                        user['last_login'] = datetime.now().isoformat()
+                        save_user(user)
+                        
                         st.rerun()
                     else:
-                        st.error("Error during registration. Please try again.")
+                        st.session_state.login_error = "User not found. Please register first."
+    
+    if st.session_state.login_error:
+        col1, col2, col3 = st.columns([1, 3, 1])
+        with col2:
+            st.error(st.session_state.login_error)
+    
+    # Registration section
+    st.markdown(f"""
+    <div class="login-container" style="margin-top: 30px;">
+        <div class="register-section">
+            <h3 style="color: {BRAND_COLOR}; font-size: 22px; margin-bottom: 15px;">New User? Register Here</h3>
+            <p style="margin-bottom: 20px; color: #666;">Create an account to start sharing your dining experiences with us.</p>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    col1, col2, col3 = st.columns([1, 3, 1])
+    with col2:
+        with st.form("register_form", border=False):
+            name = st.text_input("Full Name")
+            email = st.text_input("Email Address")
+            phone = st.text_input("Phone (South African format: 0XX XXX XXXX)")
+            submit = st.form_submit_button("Register", use_container_width=True)
+            
+            if submit:
+                # Normalize email
+                normalized_email = email.lower().strip()
+                
+                # Check if user already exists (case insensitive)
+                existing_user = find_user_by_email(normalized_email)
+                
+                if existing_user:
+                    st.error("A user with this email already exists. Please login instead.")
+                elif not email or not name:
+                    st.error("Name and email are required.")
+                else:
+                    # Validate phone number
+                    is_valid_phone, formatted_phone = validate_sa_phone_number(phone)
+                    
+                    if phone and not is_valid_phone:
+                        st.error("Please enter a valid South African phone number (e.g., 071 123 4567 or +27 71 123 4567)")
+                    else:
+                        # Create new user
+                        user_id = str(uuid.uuid4())
+                        new_user = {
+                            "user_id": user_id,
+                            "username": normalized_email.split('@')[0],
+                            "email": normalized_email,  # Store normalized email
+                            "phone": formatted_phone,   # Store formatted phone
+                            "name": name,
+                            "last_login": datetime.now().isoformat(),
+                            "registration_date": datetime.now().isoformat()
+                        }
+                        
+                        if save_user(new_user):
+                            # Set cookie
+                            cookie_manager = get_cookie_manager()
+                            cookie_manager.set(
+                                cookie="user_id", 
+                                val=user_id,
+                                expires_at=datetime.now() + timedelta(days=30)
+                            )                    
+                            # Update session state
+                            st.session_state.is_logged_in = True
+                            st.session_state.current_user = new_user
+                            st.session_state.customer_id = user_id
+                            st.session_state.customer_info = {
+                                "name": name,
+                                "email": normalized_email,
+                                "phone": formatted_phone
+                            }
+                            st.session_state.register_success = "Registration successful!"
+                            st.rerun()
+                        else:
+                            st.error("Error during registration. Please try again.")
+
 # Check if user is logged in via cookie
 def check_login_status():
     if st.session_state.is_logged_in:
@@ -364,6 +394,7 @@ def check_login_status():
             return True
     
     return False
+
 # Logout function
 def logout():
     cookie_manager = get_cookie_manager()
@@ -378,7 +409,7 @@ def logout():
     
     st.rerun()
 
-# LLM functions
+# LLM functions (unchanged)
 def get_llm():
     if not os.environ.get("OPENAI_API_KEY"):
         st.error("OpenAI API key not found. Please set the OPENAI_API_KEY environment variable.")
@@ -448,9 +479,6 @@ def process_and_validate_review(text):
     return process_review(text), None
 
 # Audio functions
-import os
-import requests
-import streamlit as st
 def process_audio_file(input_file_path):
     """Apply audio processing to improve quality before transcription"""
     try:
@@ -474,6 +502,7 @@ def process_audio_file(input_file_path):
     except Exception as e:
         st.warning(f"Audio processing failed, using original audio: {str(e)}")
         return input_file_path
+
 def transcribe_audio(audio_file_path):
     try:
         # Get API token from environment variable
@@ -518,19 +547,21 @@ def transcribe_audio(audio_file_path):
 
 def record_audio():
     instruction_container = st.empty()
-    # Add recording tips (right after defining instruction_container)
-    st.markdown("""
-    <div class="card-container">
-        <h4 style="color: #5a7d7c; margin-top: 0;">Tips for Better Audio Quality:</h4>
-        <ul>
-            <li>Speak clearly and at a normal pace</li>
-            <li>Keep the microphone 4-6 inches from your mouth</li>
-            <li>Reduce background noise when possible</li>
-            <li>Ensure your device microphone is not covered or obstructed</li>
-            <li>Use headphones with a built-in microphone for better results</li>
+    
+    # Add recording tips with improved styling
+    st.markdown(f"""
+    <div style="background-color: #f8f9fa; border-radius: 10px; padding: 20px; margin-bottom: 20px; border-left: 5px solid {BRAND_COLOR};">
+        <h4 style="color: {BRAND_COLOR}; margin-top: 0; font-size: 18px;">📝 Tips for Better Audio Quality</h4>
+        <ul style="margin-bottom: 0; padding-left: 20px;">
+            <li style="margin-bottom: 8px;">Speak clearly and at a normal pace</li>
+            <li style="margin-bottom: 8px;">Keep the microphone 4-6 inches from your mouth</li>
+            <li style="margin-bottom: 8px;">Reduce background noise when possible</li>
+            <li style="margin-bottom: 8px;">Ensure your device microphone is not covered</li>
+            <li style="margin-bottom: 0;">Use headphones with a built-in microphone for better results</li>
         </ul>
     </div>
     """, unsafe_allow_html=True)
+    
     recorder_container = st.empty()
     process_container = st.empty()
     
@@ -539,10 +570,15 @@ def record_audio():
         st.session_state.record_again = False
         st.rerun()
     
-    # Show instruction
-    instruction_container.markdown("""
-    <div style="padding: 15px; border: 1px solid #ddd; border-radius: 10px; margin-bottom: 10px;">
-        <p>🎙️ Click the microphone to start recording and click again to stop recording. (max 25 sec)</p>
+    # Show instruction with improved styling
+    instruction_container.markdown(f"""
+    <div style="background-color: #f0f7fa; padding: 15px; border-radius: 10px; margin-bottom: 20px; 
+         border-left: 5px solid {BRAND_COLOR}; display: flex; align-items: center;">
+        <div style="font-size: 24px; margin-right: 15px;">🎙️</div>
+        <div>
+            <p style="margin: 0; font-size: 16px;">Click the microphone to start recording and click again to stop recording.</p>
+            <p style="margin: 0; font-size: 14px; color: #666; margin-top: 5px;">Maximum recording time: 25 seconds</p>
+        </div>
     </div>
     """, unsafe_allow_html=True)
     
@@ -552,8 +588,8 @@ def record_audio():
         with recorder_container:
             audio_bytes = audio_recorder(
                 text="Press and hold to record",
-                recording_color="#e53935",
-                neutral_color="#5a7d7c",
+                recording_color=ACCENT_COLOR,
+                neutral_color=BRAND_COLOR,
                 icon_name="microphone",
                 pause_threshold=25.0,
                 energy_threshold=0.01,  # Lower threshold for mobile mics
@@ -563,11 +599,29 @@ def record_audio():
         # Process recorded audio
         if audio_bytes:
             # Immediately update UI to show recording completed and waiting message
-            instruction_container.success("Recording completed! Please wait while we prepare your options...")
+            instruction_container.markdown(f"""
+            <div style="background-color: #e8f5e9; padding: 15px; border-radius: 10px; margin-bottom: 20px; 
+                border-left: 5px solid #4caf50; display: flex; align-items: center;">
+                <div style="font-size: 24px; margin-right: 15px;">✅</div>
+                <div>
+                    <p style="margin: 0; font-size: 16px; font-weight: 500;">Recording completed!</p>
+                    <p style="margin: 0; font-size: 14px; color: #666; margin-top: 5px;">Please wait while we prepare your options...</p>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
             
             # Check if the recording has enough data
             if len(audio_bytes) < 1000:  # If recording is too short (less than ~0.1 seconds)
-                instruction_container.warning("Recording was too short or unsuccessful. Please click the mic button to re-record. Wait for 5 seconds after stopping recording for next steps")
+                instruction_container.markdown(f"""
+                <div style="background-color: #fff8e1; padding: 15px; border-radius: 10px; margin-bottom: 20px; 
+                    border-left: 5px solid #ffc107; display: flex; align-items: center;">
+                    <div style="font-size: 24px; margin-right: 15px;">⚠️</div>
+                    <div>
+                        <p style="margin: 0; font-size: 16px; font-weight: 500;">Recording was too short</p>
+                        <p style="margin: 0; font-size: 14px; color: #666; margin-top: 5px;">Please click the mic button to re-record. Wait for 5 seconds after stopping recording for next steps.</p>
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
             else:
                 # Save audio file in background
                 timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
@@ -583,50 +637,64 @@ def record_audio():
                 st.rerun()
     else:
         # We have a recording, show buttons and hide recorder
-        instruction_container.success("Recording completed! Ready for next steps.")
+        instruction_container.markdown(f"""
+        <div style="background-color: #e8f5e9; padding: 15px; border-radius: 10px; margin-bottom: 20px; 
+            border-left: 5px solid #4caf50; display: flex; align-items: center;">
+            <div style="font-size: 24px; margin-right: 15px;">✅</div>
+            <div>
+                <p style="margin: 0; font-size: 16px; font-weight: 500;">Recording completed!</p>
+                <p style="margin: 0; font-size: 14px; color: #666; margin-top: 5px;">Ready for next steps.</p>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
         
-        # Process button
-        col1, col2 = process_container.columns(2)
-        with col1:
-            if st.button("✅ Process Recording", key="process_audio_btn"):
-                with st.spinner("Processing and enhancing your audio..."):
-                    # Apply audio processing to improve quality
-                    processed_audio_file = process_audio_file(st.session_state.audio_file)
-                    
-                with st.spinner("Transcribing your feedback..."):
-                    transcribed_text = transcribe_audio(processed_audio_file)
-                    
-                if transcribed_text:
-                    with st.spinner("Analyzing your feedback..."):
-                        review_analysis = process_review(transcribed_text)
+        # Process button with improved styling
+        with process_container:
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.button("✅ Process Recording", key="process_audio_btn", 
+                           use_container_width=True, 
+                           type="primary"):
+                    with st.spinner("Processing and enhancing your audio..."):
+                        # Apply audio processing to improve quality
+                        processed_audio_file = process_audio_file(st.session_state.audio_file)
                         
-                    if review_analysis:
-                        st.session_state.current_analysis = review_analysis
-                        st.session_state.show_analysis = True
-                        st.rerun()
+                    with st.spinner("Transcribing your feedback..."):
+                        transcribed_text = transcribe_audio(processed_audio_file)
+                        
+                    if transcribed_text:
+                        with st.spinner("Analyzing your feedback..."):
+                            review_analysis = process_review(transcribed_text)
+                            
+                        if review_analysis:
+                            st.session_state.current_analysis = review_analysis
+                            st.session_state.show_analysis = True
+                            st.rerun()
+                        else:
+                            st.error("Failed to analyze your feedback. Please try again.")
                     else:
-                        st.error("Failed to analyze your feedback. Please try again.")
-                else:
-                    st.error("Failed to transcribe your audio. Please try again.")
-        
-        # Record again button
-        with col2:
-            if st.button("🔄 Record Again", key="record_again_btn"):
-                if os.path.exists(st.session_state.audio_file):
-                    try:
-                        os.remove(st.session_state.audio_file)
-                    except:
-                        pass
-                        
-                # Reset states
-                st.session_state.audio_file = None
-                st.session_state.show_analysis = False
-                st.session_state.current_analysis = None
-                st.session_state.is_recording = False
-                st.session_state.record_again = True
-                st.rerun()
+                        st.error("Failed to transcribe your audio. Please try again.")
+            
+            # Record again button
+            with col2:
+                if st.button("🔄 Record Again", key="record_again_btn", 
+                           use_container_width=True):
+                    if os.path.exists(st.session_state.audio_file):
+                        try:
+                            os.remove(st.session_state.audio_file)
+                        except:
+                            pass
+                            
+                    # Reset states
+                    st.session_state.audio_file = None
+                    st.session_state.show_analysis = False
+                    st.session_state.current_analysis = None
+                    st.session_state.is_recording = False
+                    st.session_state.record_again = True
+                    st.rerun()
     
     return None
+
 def process_review(transcribed_text):
     if not transcribed_text:
         return None
@@ -678,206 +746,425 @@ def process_review(transcribed_text):
             "raw_transcription": transcribed_text,
             "error": "Failed to format response properly"
         }
-# UI functions
+
+# UI functions - Enhanced with better styling
 def display_analysis(review_analysis):
     with st.container():
-        st.markdown("""
-        <div style="padding: 20px; border-radius: 10px; border: 1px solid #ddd; box-shadow: 0 2px 5px rgba(0,0,0,0.1);">
-            <h3 style="color: #5a7d7c;">Feedback Analysis</h3>
+        st.markdown(f"""
+        <div style="padding: 25px; border-radius: 10px; border: 1px solid #e0e0e0; 
+             box-shadow: 0 4px 12px rgba(0,0,0,0.05); background-color: white; margin-bottom: 20px;">
+            <h3 style="color: {BRAND_COLOR}; margin-top: 0; margin-bottom: 20px; font-size: 22px; 
+                 border-bottom: 2px solid {BRAND_COLOR}; padding-bottom: 10px;">
+                Feedback Analysis
+            </h3>
         """, unsafe_allow_html=True)
         
-        st.write(f"**Summary**: {review_analysis.get('summary', 'N/A')}")
-        st.write(f"**Food Quality**: {review_analysis.get('food_quality', 'N/A')}")
-        st.write(f"**Service**: {review_analysis.get('service', 'N/A')}")
-        st.write(f"**Atmosphere**: {review_analysis.get('atmosphere', 'N/A')}")
+        # Summary section with improved styling
+        st.markdown(f"""
+        <div style="margin-bottom: 20px; background-color: #f8f9fa; padding: 15px; border-radius: 8px;">
+            <h4 style="color: {BRAND_COLOR}; margin-top: 0; margin-bottom: 10px; font-size: 18px;">Summary</h4>
+            <p style="margin: 0;">{review_analysis.get('summary', 'N/A')}</p>
+        </div>
+        """, unsafe_allow_html=True)
         
-        # Add the new field for music and entertainment
-        st.write(f"**Music & Entertainment**: {review_analysis.get('music_and_entertainment', 'N/A')}")
+        # Create a grid for the assessment categories
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.markdown(f"""
+            <div style="background-color: #f8f9fa; padding: 15px; border-radius: 8px; height: 100%;">
+                <h4 style="color: {BRAND_COLOR}; margin-top: 0; margin-bottom: 10px; font-size: 16px;">
+                    <span style="margin-right: 8px;">🍽️</span> Food Quality
+                </h4>
+                <p style="margin: 0;">{review_analysis.get('food_quality', 'N/A')}</p>
+            </div>
+            """, unsafe_allow_html=True)
+            
+        with col2:
+            st.markdown(f"""
+            <div style="background-color: #f8f9fa; padding: 15px; border-radius: 8px; height: 100%;">
+                <h4 style="color: {BRAND_COLOR}; margin-top: 0; margin-bottom: 10px; font-size: 16px;">
+                    <span style="margin-right: 8px;">👨‍🍳</span> Service
+                </h4>
+                <p style="margin: 0;">{review_analysis.get('service', 'N/A')}</p>
+            </div>
+            """, unsafe_allow_html=True)
+            
+        col3, col4 = st.columns(2)
+        
+        with col3:
+            st.markdown(f"""
+            <div style="background-color: #f8f9fa; padding: 15px; border-radius: 8px; margin-top: 15px; height: 100%;">
+                <h4 style="color: {BRAND_COLOR}; margin-top: 0; margin-bottom: 10px; font-size: 16px;">
+                    <span style="margin-right: 8px;">🏮</span> Atmosphere
+                </h4>
+                <p style="margin: 0;">{review_analysis.get('atmosphere', 'N/A')}</p>
+            </div>
+            """, unsafe_allow_html=True)
+            
+        with col4:
+            st.markdown(f"""
+            <div style="background-color: #f8f9fa; padding: 15px; border-radius: 8px; margin-top: 15px; height: 100%;">
+                <h4 style="color: {BRAND_COLOR}; margin-top: 0; margin-bottom: 10px; font-size: 16px;">
+                    <span style="margin-right: 8px;">🎵</span> Music & Entertainment
+                </h4>
+                <p style="margin: 0;">{review_analysis.get('music_and_entertainment', 'N/A')}</p>
+            </div>
+            """, unsafe_allow_html=True)
         
         # Sentiment indicator with animated stars
         sentiment = review_analysis.get('sentiment_score', 'N/A')
         if isinstance(sentiment, (int, float)):
-            st.write("**Overall Sentiment**:")
-            animated_stars = display_animated_stars(sentiment)
-            st.markdown(animated_stars, unsafe_allow_html=True)
+            st.markdown(f"""
+            <div style="margin-top: 20px; background-color: #f8f9fa; padding: 15px; border-radius: 8px; 
+                 text-align: center;">
+                <h4 style="color: {BRAND_COLOR}; margin-top: 0; margin-bottom: 10px; font-size: 18px;">
+                    Overall Sentiment
+                </h4>
+                {display_animated_stars(sentiment)}
+            </div>
+            """, unsafe_allow_html=True)
         else:
-            st.write(f"**Overall Sentiment**: {sentiment}/5")
+            st.markdown(f"""
+            <div style="margin-top: 20px; background-color: #f8f9fa; padding: 15px; border-radius: 8px; 
+                 text-align: center;">
+                <h4 style="color: {BRAND_COLOR}; margin-top: 0; margin-bottom: 10px; font-size: 18px;">
+                    Overall Sentiment
+                </h4>
+                <p style="margin: 0; font-size: 18px;">{sentiment}/5</p>
+            </div>
+            """, unsafe_allow_html=True)
         
-        # Display key points
-        st.markdown("<h4 style='color: #5a7d7c; margin-top: 15px;'>Key Points</h4>", unsafe_allow_html=True)
+        # Display key points with improved styling
         if 'specific_points' in review_analysis:
+            st.markdown(f"""
+            <div style="margin-top: 20px; background-color: #f8f9fa; padding: 15px; border-radius: 8px;">
+                <h4 style="color: {BRAND_COLOR}; margin-top: 0; margin-bottom: 10px; font-size: 18px;">
+                    <span style="margin-right: 8px;">🔑</span> Key Points
+                </h4>
+                <ul style="margin-bottom: 0; padding-left: 20px;">
+            """, unsafe_allow_html=True)
+            
             for point in review_analysis['specific_points']:
-                st.markdown(f"<div style='margin-left: 15px;'>• {point}</div>", unsafe_allow_html=True)
+                st.markdown(f"<li style='margin-bottom: 8px;'>{point}</li>", unsafe_allow_html=True)
+                
+            st.markdown("</ul></div>", unsafe_allow_html=True)
         
-        # Display suggestions
+        # Display suggestions with improved styling
         if 'improvement_suggestions' in review_analysis:
-            st.markdown("<h4 style='color: #5a7d7c; margin-top: 15px;'>Suggestions for Improvement</h4>", unsafe_allow_html=True)
+            st.markdown(f"""
+            <div style="margin-top: 20px; background-color: #f8f9fa; padding: 15px; border-radius: 8px;">
+                <h4 style="color: {BRAND_COLOR}; margin-top: 0; margin-bottom: 10px; font-size: 18px;">
+                    <span style="margin-right: 8px;">💡</span> Suggestions for Improvement
+                </h4>
+                <ul style="margin-bottom: 0; padding-left: 20px;">
+            """, unsafe_allow_html=True)
+            
             for suggestion in review_analysis['improvement_suggestions']:
-                st.markdown(f"<div style='margin-left: 15px;'>• {suggestion}</div>", unsafe_allow_html=True)
+                st.markdown(f"<li style='margin-bottom: 8px;'>{suggestion}</li>", unsafe_allow_html=True)
+                
+            st.markdown("</ul></div>", unsafe_allow_html=True)
         
-        st.markdown("</div>", unsafe_allow_html=True)        
+        st.markdown("</div>", unsafe_allow_html=True)
+
 def collect_customer_info():
     # If the user is logged in, display their info without ability to edit
     if st.session_state.is_logged_in:
-        st.markdown("""
-        <div style="padding: 15px; border: 1px solid #ddd; border-radius: 10px; margin-bottom: 15px;">
-            <h4 style="color: #5a7d7c; margin-top: 0;">Your Information</h4>
+        st.markdown(f"""
+        <div style="background-color: #f8f9fa; padding: 20px; border-radius: 10px; margin-bottom: 20px; 
+             border-left: 5px solid {BRAND_COLOR};">
+            <h4 style="color: {BRAND_COLOR}; margin-top: 0; margin-bottom: 15px; font-size: 18px;">
+                <span style="margin-right: 8px;">👤</span> Your Information
+            </h4>
+            <div style="display: flex; flex-wrap: wrap;">
+                <div style="flex: 1; min-width: 200px; margin-bottom: 10px;">
+                    <p style="margin: 0; color: #666; font-size: 14px;">Name</p>
+                    <p style="margin: 0; font-weight: 500; font-size: 16px;">{st.session_state.customer_info['name']}</p>
+                </div>
+                <div style="flex: 1; min-width: 200px; margin-bottom: 10px;">
+                    <p style="margin: 0; color: #666; font-size: 14px;">Email</p>
+                    <p style="margin: 0; font-weight: 500; font-size: 16px;">{st.session_state.customer_info['email']}</p>
+                </div>
+                <div style="flex: 1; min-width: 200px; margin-bottom: 10px;">
+                    <p style="margin: 0; color: #666; font-size: 14px;">Phone</p>
+                    <p style="margin: 0; font-weight: 500; font-size: 16px;">{st.session_state.customer_info['phone'] or 'Not provided'}</p>
+                </div>
+            </div>
         """, unsafe_allow_html=True)
         
-        st.write(f"**Name:** {st.session_state.customer_info['name']}")
-        st.write(f"**Email:** {st.session_state.customer_info['email']}")
-        st.write(f"**Phone:** {st.session_state.customer_info['phone'] or 'Not provided'}")
-        
         # Add edit button that redirects to account settings (optional)
-        if st.button("✏️ Edit Profile"):
+        if st.button("✏️ Edit Profile", type="secondary"):
             st.info("To edit your profile information, please contact restaurant management.")
             
         st.markdown("</div>", unsafe_allow_html=True)
     else:
-        # For non-logged in users, allow editing
-        customer_name = st.text_input("Name", value=st.session_state.customer_info["name"])
-        customer_email = st.text_input("Email", value=st.session_state.customer_info["email"])
-        customer_phone = st.text_input("Phone", value=st.session_state.customer_info["phone"])
+        # For non-logged in users, allow editing with improved styling
+        st.markdown(f"""
+        <div style="background-color: #f8f9fa; padding: 20px; border-radius: 10px; margin-bottom: 20px; 
+             border-left: 5px solid {BRAND_COLOR};">
+            <h4 style="color: {BRAND_COLOR}; margin-top: 0; margin-bottom: 15px; font-size: 18px;">
+                <span style="margin-right: 8px;">👤</span> Your Information
+            </h4>
+            <p style="margin-bottom: 15px;">Please provide your contact information to submit feedback.</p>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            customer_name = st.text_input("Name", value=st.session_state.customer_info["name"])
+        with col2:
+            customer_email = st.text_input("Email", value=st.session_state.customer_info["email"])
+        
+        customer_phone = st.text_input("Phone (optional)", value=st.session_state.customer_info["phone"])
         
         # Update customer info
         st.session_state.customer_info = {
             "name": customer_name, "email": customer_email, "phone": customer_phone
         }
-# CSS for styling
+
+# CSS for styling - Enhanced with modern design elements
 def load_css():
-    st.markdown("""
+    st.markdown(f"""
     <style>
+    /* Page background and text */
+    .stApp {{
+        background-color: #ffffff;
+        color: #333333;
+    }}
+    
+    /* Header styling */
+    h1, h2, h3, h4, h5, h6 {{
+        font-family: 'Helvetica Neue', Arial, sans-serif;
+        color: {BRAND_COLOR};
+    }}
+    
+    h1 {{
+        font-size: 2.5rem;
+        font-weight: 700;
+        margin-bottom: 1.5rem;
+        padding-bottom: 0.5rem;
+        border-bottom: 2px solid {BRAND_COLOR};
+    }}
+    
+    h2 {{
+        font-size: 1.8rem;
+        font-weight: 600;
+        margin-top: 1.5rem;
+    }}
+    
     /* Custom styling for tabs */
-    .stTabs [data-baseweb="tab-list"] {
+    .stTabs [data-baseweb="tab-list"] {{
         gap: 2px;
-        background-color: #5a7d7c;
+        background-color: #f8f9fa;
         border-radius: 10px;
         padding: 5px;
-    }
+    }}
     
-    .stTabs [data-baseweb="tab"] {
-    background-color: #5a7d7c;
-    border-radius: 8px;
-    color: black;
-    padding: 10px 16px;
-    font-size: 16px;
-    }
+    .stTabs [data-baseweb="tab"] {{
+        background-color: #f8f9fa;
+        border-radius: 8px;
+        color: #666;
+        padding: 10px 16px;
+        font-size: 16px;
+        font-weight: 500;
+        transition: all 0.2s ease;
+    }}
     
-    .stTabs [aria-selected="true"] {
-        background-color: #5a7d7c;
+    .stTabs [aria-selected="true"] {{
+        background-color: {BRAND_COLOR};
         color: white;
-    }
+    }}
     
     /* Card-like container style */
-    .card-container {
-        padding: 20px;
+    .card-container {{
+        padding: 25px;
         border-radius: 10px;
-        border: 1px solid #ddd;
-        box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+        border: 1px solid #e0e0e0;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.05);
+        background-color: white;
         margin-bottom: 20px;
-    }
+    }}
     
     /* Custom button styling */
-    .stButton>button {
+    .stButton>button {{
         border-radius: 8px;
         font-weight: 500;
         transition: all 0.3s;
-    }
+        padding: 0.5rem 1rem;
+        border: none;
+        box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+    }}
     
-    .stButton>button:hover {
-        border-color: #f7f7f7;
-        color: #5a7d7c;
-    }
+    .stButton>button:hover {{
+        transform: translateY(-2px);
+        box-shadow: 0 4px 8px rgba(0,0,0,0.15);
+    }}
+    
+    /* Primary button */
+    .stButton>button[data-baseweb="button"][kind="primary"] {{
+        background-color: {BRAND_COLOR};
+    }}
+    
+    .stButton>button[data-baseweb="button"][kind="primary"]:hover {{
+        background-color: #4a6d6c;
+    }}
+    
+    /* Secondary button */
+    .stButton>button[data-baseweb="button"]:not([kind="primary"]) {{
+        border: 1px solid #e0e0e0;
+    }}
+    
+    .stButton>button[data-baseweb="button"]:not([kind="primary"]):hover {{
+        border-color: {BRAND_COLOR};
+        color: {BRAND_COLOR};
+    }}
     
     /* Expander styling */
-    .streamlit-expanderHeader {
+    .streamlit-expanderHeader {{
         font-size: 16px;
-        background-color: #f7f7f7;
+        background-color: #f8f9fa;
         border-radius: 8px;
-        padding: 10px;
-    }
+        padding: 12px 15px;
+        font-weight: 500;
+        color: #333;
+        border: none;
+        box-shadow: 0 2px 5px rgba(0,0,0,0.05);
+        transition: all 0.2s ease;
+    }}
+    
+    .streamlit-expanderHeader:hover {{
+        background-color: #f0f0f0;
+    }}
+    
+    .streamlit-expanderContent {{
+        border: none;
+        border-top: 1px solid #f0f0f0;
+        padding: 15px;
+    }}
     
     /* Text area styling */
-    .stTextArea>div>div {
+    .stTextArea>div>div {{
         border-radius: 8px;
-    }
+        border-color: #e0e0e0;
+    }}
     
-    /* Customer info form styling */
-    .customer-info-form {
-        padding: 15px;
+    .stTextArea textarea:focus {{
+        border-color: {BRAND_COLOR};
+        box-shadow: 0 0 0 1px {BRAND_COLOR};
+    }}
+    
+    /* Text input styling */
+    .stTextInput>div>div {{
+        border-radius: 8px;
+        border-color: #e0e0e0;
+    }}
+    
+    .stTextInput input:focus {{
+        border-color: {BRAND_COLOR};
+        box-shadow: 0 0 0 1px {BRAND_COLOR};
+    }}
+    
+    /* Form styling */
+    [data-testid="stForm"] {{
+        background-color: #f8f9fa;
+        padding: 20px;
         border-radius: 10px;
-        background-color: #f7f7f7;
-        margin-bottom: 15px;
-    }
+        box-shadow: 0 2px 5px rgba(0,0,0,0.05);
+    }}
     
-    /* Login form styling */
-    .login-container {
-        max-width: 500px;
+    /* Login container styling */
+    .login-container {{
+        max-width: 600px;
         margin: 0 auto;
         padding: 30px;
         border-radius: 10px;
-        border: 1px solid #ddd;
-        box-shadow: 0 4px 8px rgba(0,0,0,0.1);
-    }
+        border: 1px solid #e0e0e0;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.05);
+        background-color: white;
+    }}
     
-    .login-header {
-        color: #5a7d7c;
+    .login-header {{
+        color: {BRAND_COLOR};
         text-align: center;
-        margin-bottom: 20px;
-    }
+        margin-bottom: 30px;
+    }}
     
-    .form-divider {
+    .form-divider {{
         margin: 25px 0;
-        border-top: 1px solid #ddd;
-    }
-    
-    /* User account section */
-    .user-account {
-        margin-bottom: 20px;
-        padding: 15px;
-        border-radius: 10px;
-        background-color: #f7f7f7;
-    }
-    
-    .user-greeting {
-        font-weight: bold;
-        font-size: 18px;
-        color: #5a7d7c;
-    }
+        border-top: 1px solid #e0e0e0;
+    }}
     
     /* Star rating animation */
-    @keyframes star-pop {
-        0% { transform: scale(0.8); opacity: 0.4; }
-        50% { transform: scale(1.2); opacity: 0.9; }
-        100% { transform: scale(1); opacity: 1; }
-    }
+    @keyframes star-pop {{
+        0% {{ transform: scale(0.8); opacity: 0.4; }}
+        50% {{ transform: scale(1.2); opacity: 0.9; }}
+        100% {{ transform: scale(1); opacity: 1; }}
+    }}
     
-    @keyframes star-glow {
-        0% { text-shadow: 0 0 0px rgba(255, 215, 0, 0); }
-        50% { text-shadow: 0 0 8px rgba(255, 215, 0, 0.8); }
-        100% { text-shadow: 0 0 4px rgba(255, 215, 0, 0.4); }
-    }
+    @keyframes star-glow {{
+        0% {{ text-shadow: 0 0 0px rgba(255, 215, 0, 0); }}
+        50% {{ text-shadow: 0 0 8px rgba(255, 215, 0, 0.8); }}
+        100% {{ text-shadow: 0 0 4px rgba(255, 215, 0, 0.4); }}
+    }}
     
-    .animated-star {
+    .animated-star {{
         display: inline-block;
         animation: star-pop 0.3s ease-out forwards, star-glow 1.5s ease-in-out infinite alternate;
         animation-delay: calc(var(--star-index) * 0.1s), calc(var(--star-index) * 0.1s + 0.3s);
-    }
+    }}
+    
+    /* Sidebar styling */
+    [data-testid="stSidebar"] {{
+        background-color: #f8f9fa;
+        border-right: 1px solid #e0e0e0;
+    }}
+    
+    [data-testid="stSidebar"] [data-testid="stMarkdown"] h1,
+    [data-testid="stSidebar"] [data-testid="stMarkdown"] h2,
+    [data-testid="stSidebar"] [data-testid="stMarkdown"] h3 {{
+        color: {BRAND_COLOR};
+        font-size: 1.2rem;
+        font-weight: 600;
+        margin-top: 1.5rem;
+        margin-bottom: 1rem;
+        padding-bottom: 0.3rem;
+        border-bottom: 1px solid #e0e0e0;
+    }}
+    
+    /* Spinner styling */
+    .stSpinner > div {{
+        border-color: {BRAND_COLOR} !important;
+    }}
+    
+    /* Alert styling */
+    .stAlert {{
+        border-radius: 8px;
+        border: none;
+    }}
+    
+    .stAlert [data-baseweb="notification"] {{
+        border-radius: 8px;
+        border: none;
+    }}
     </style>
     """, unsafe_allow_html=True)
 
 def display_animated_stars(sentiment_score, show_number=True):
     if not isinstance(sentiment_score, (int, float)):
-        return f"**Overall Sentiment**: {sentiment_score}/5"
+        return f"<span style='font-size: 18px;'>{sentiment_score}/5</span>"
     
     # Create animated stars HTML
     stars_html = ""
     for i in range(int(sentiment_score)):
-        stars_html += f'<span class="animated-star" style="--star-index: {i};">⭐</span>'
+        stars_html += f'<span class="animated-star" style="--star-index: {i}; font-size: 28px;">⭐</span>'
+    
+    # Add empty stars for the remaining
+    for i in range(int(sentiment_score), 5):
+        stars_html += f'<span style="font-size: 28px; color: #d0d0d0;">☆</span>'
     
     # Create the rating display with or without the number
     if show_number:
-        rating_html = f'<div style="font-size: 24px;">{stars_html} ({sentiment_score}/5)</div>'
+        rating_html = f'<div style="font-size: 24px;">{stars_html} <span style="font-size: 18px; color: #666; margin-left: 10px;">({sentiment_score}/5)</span></div>'
     else:
         rating_html = f'<div style="font-size: 24px;">{stars_html}</div>'
     
@@ -927,61 +1214,85 @@ def main():
     init_session_state()
     load_css()
     
-    st.title("Restaurant Feedback System")
+    # App header with logo and title
+    col1, col2 = st.columns([1, 5])
+    with col1:
+        st.image("https://emojipedia-us.s3.amazonaws.com/source/microsoft-teams/337/fork-and-knife-with-plate_1f37d-fe0f.png", width=80)
+    with col2:
+        st.title("Restaurant Feedback Portal")
+        st.markdown("<p style='font-size: 18px; margin-top: -10px;'>Share your dining experience and help us improve!</p>", unsafe_allow_html=True)
     
-    # Sidebar
+    # Sidebar with improved styling
     with st.sidebar:
         st.header("About this system")
-        st.markdown("""
-        <div class="card-container">
-            <p>Share your dining experience with us! Your feedback helps us improve.</p>
-            <p>This system will:</p>
-            <ol>
-                <li>Record your verbal feedback (25 seconds)</li>
-                <li>Transcribe what you said</li>
-                <li>Analyze your feedback</li>
-                <li>Save your insights for the restaurant</li>
+        st.markdown(f"""
+        <div style="background-color: white; padding: 20px; border-radius: 10px; 
+             box-shadow: 0 2px 5px rgba(0,0,0,0.05); margin-bottom: 20px;">
+            <p style="margin-top: 0;">Share your dining experience with us! Your feedback helps us improve.</p>
+            <p style="margin-bottom: 10px;">This system will:</p>
+            <ol style="padding-left: 20px; margin-bottom: 0;">
+                <li style="margin-bottom: 8px;">Record your verbal feedback (25 seconds)</li>
+                <li style="margin-bottom: 8px;">Transcribe what you said</li>
+                <li style="margin-bottom: 8px;">Analyze your feedback</li>
+                <li style="margin-bottom: 0;">Save your insights for the restaurant</li>
             </ol>
         </div>
         """, unsafe_allow_html=True)
         
-        # User account section
+        # User account section with improved styling
         st.header("Your Account")
         
         # If user is logged in, show user info and logout button
         if check_login_status():
             st.markdown(f"""
-            <div class="card-container">
-                <p><b>Welcome, {st.session_state.current_user.get('name', 'User')}!</b></p>
-                <p>Email: {st.session_state.current_user.get('email', 'N/A')}</p>
+            <div style="background-color: white; padding: 20px; border-radius: 10px; 
+                 box-shadow: 0 2px 5px rgba(0,0,0,0.05); margin-bottom: 20px;">
+                <div style="display: flex; align-items: center; margin-bottom: 15px;">
+                    <div style="width: 50px; height: 50px; border-radius: 50%; background-color: {BRAND_COLOR}; 
+                         color: white; display: flex; align-items: center; justify-content: center; 
+                         font-size: 20px; margin-right: 15px;">
+                        {st.session_state.current_user.get('name', 'U')[0].upper()}
+                    </div>
+                    <div>
+                        <p style="margin: 0; font-weight: 600; font-size: 18px;">
+                            {st.session_state.current_user.get('name', 'User')}
+                        </p>
+                        <p style="margin: 0; color: #666; font-size: 14px;">
+                            {st.session_state.current_user.get('email', 'N/A')}
+                        </p>
+                    </div>
+                </div>
+                <p style="margin: 0; font-size: 14px; color: #666;">
+                    Last login: {format_date(st.session_state.current_user.get('last_login', 'Unknown'))}
+                </p>
             </div>
             """, unsafe_allow_html=True)
             
-            if st.button("Logout"):
+            if st.button("🚪 Logout", use_container_width=True):
                 logout()
         
-        # Show recent reviews
+        # Show recent reviews with improved styling
         if st.session_state.reviews:
             st.header("Recent Feedback")
             recent_reviews = sorted(
                 st.session_state.reviews, 
                 key=lambda x: x.get('timestamp', ''), 
                 reverse=True
-            )[:5]
+            )[:3]
             
             for i, review in enumerate(recent_reviews):
                 display_date = format_date(review.get('timestamp', 'Unknown date'), "%b %d, %Y")
                 
                 with st.expander(f"Review {i+1} - {display_date}"):
-                    st.write(f"**Summary**: {review.get('summary', 'N/A')}")
-                    
-                    # Display animated stars for sentiment
+                    # Sentiment display with animated stars
                     sentiment = review.get('sentiment_score', 'N/A')
                     if isinstance(sentiment, (int, float)):
-                        animated_stars = display_animated_stars(sentiment, show_number=True)
-                        st.markdown(f"**Sentiment**: {animated_stars}", unsafe_allow_html=True)
+                        animated_stars = display_animated_stars(sentiment, show_number=False)
+                        st.markdown(animated_stars, unsafe_allow_html=True)
                     else:
-                        st.write(f"**Sentiment**: {sentiment}/5")    
+                        st.write(f"**Sentiment**: {sentiment}/5")
+                        
+                    st.write(f"**Summary**: {review.get('summary', 'N/A')}")
     
     # Check if user is logged in before showing main content
     if not check_login_status():
@@ -991,7 +1302,7 @@ def main():
         if st.session_state.register_success:
             st.success(st.session_state.register_success)
     else:
-        # User is logged in, show main content
+        # User is logged in, show main content with improved tab styling
         if st.session_state.is_owner:
             # Show all tabs for owner
             tab1, tab2, tab3 = st.tabs(["📝 Leave Feedback", "📋 View All Feedback", "👤 My Feedback"])
@@ -1001,9 +1312,13 @@ def main():
 
         # Feedback tab
         with tab1:
-            st.markdown("""
-            <h2 style="color: #5a7d7c;">Share Your Experience</h2>
-            <p>Please tell us about your dining experience at our restaurant.</p>
+            st.markdown(f"""
+            <h2 style="color: {BRAND_COLOR}; margin-bottom: 20px;">
+                <span style="margin-right: 10px;">📝</span> Share Your Experience
+            </h2>
+            <p style="font-size: 16px; margin-bottom: 20px;">
+                Please tell us about your dining experience at our restaurant. Your feedback helps us improve!
+            </p>
             """, unsafe_allow_html=True)
             
             # Collect customer information
@@ -1011,15 +1326,24 @@ def main():
                 
             col1, col2 = st.columns(2)
             
-            # Left column - Audio recording
+            # Left column - Audio recording with improved styling
             with col1:
-                st.markdown('<div class="card-container">', unsafe_allow_html=True)
+                st.markdown(f"""
+                <div style="background-color: white; padding: 20px; border-radius: 10px; 
+                     box-shadow: 0 4px 12px rgba(0,0,0,0.05); margin-bottom: 20px;">
+                    <h3 style="color: {BRAND_COLOR}; margin-top: 0; margin-bottom: 15px; font-size: 20px;">
+                        <span style="margin-right: 8px;">🎙️</span> Voice Feedback
+                    </h3>
+                    <p style="margin-bottom: 20px;">
+                        Record your feedback by speaking into your microphone. This is the fastest way to share your experience.
+                    </p>
+                </div>
+                """, unsafe_allow_html=True)
                 
                 # Show recording UI if not showing analysis
                 if not st.session_state.show_analysis:
                     audio_file = record_audio()
                 
-                st.markdown('</div>', unsafe_allow_html=True)
                 with st.expander("Having Audio Problems?"):
                     st.markdown("""
                     ### Microphone Access
@@ -1045,10 +1369,10 @@ def main():
                 with col1:
                     display_analysis(st.session_state.current_analysis)
                     
-                    # Save/Cancel buttons
+                    # Save/Cancel buttons with improved styling
                     col_save, col_cancel = st.columns(2)
                     with col_save:
-                        if st.button("💾 Save Feedback"):
+                        if st.button("💾 Save Feedback", type="primary", use_container_width=True):
                             if save_review(st.session_state.current_analysis):
                                 st.success("Thank you! Your feedback has been saved.")
                                 # Reset states
@@ -1059,7 +1383,7 @@ def main():
                                 st.rerun()
                     
                     with col_cancel:
-                        if st.button("↩️ Start Over"):
+                        if st.button("↩️ Start Over", use_container_width=True):
                             # Reset states
                             st.session_state.audio_file = None
                             st.session_state.show_analysis = False
@@ -1068,14 +1392,25 @@ def main():
                             st.session_state.record_again = True
                             st.rerun()
 
-            # Text input - Right column
+            # Text input - Right column with improved styling
             with col2:
                 if not st.session_state.show_analysis:
-                    st.markdown('<div class="card-container">', unsafe_allow_html=True)
-                    st.write("**Or type your feedback:**")
-                    text_feedback = st.text_area("Your feedback", height=150)
+                    st.markdown(f"""
+                    <div style="background-color: white; padding: 20px; border-radius: 10px; 
+                         box-shadow: 0 4px 12px rgba(0,0,0,0.05); margin-bottom: 20px;">
+                        <h3 style="color: {BRAND_COLOR}; margin-top: 0; margin-bottom: 15px; font-size: 20px;">
+                            <span style="margin-right: 8px;">✏️</span> Written Feedback
+                        </h3>
+                        <p style="margin-bottom: 20px;">
+                            Prefer typing? Share your experience by writing your feedback below.
+                        </p>
+                    </div>
+                    """, unsafe_allow_html=True)
                     
-                    if st.button("📝 Submit Written Feedback"):
+                    text_feedback = st.text_area("Your feedback", height=200, 
+                                               placeholder="Tell us about your experience... What did you enjoy? What could we improve?")
+                    
+                    if st.button("📝 Submit Written Feedback", type="primary", use_container_width=True):
                         if text_feedback:
                             with st.spinner("Analyzing your feedback..."):
                                 review_analysis, validation_error = process_and_validate_review(text_feedback)
@@ -1090,12 +1425,18 @@ def main():
                                 st.rerun()
                         else:
                             st.warning("Please enter your feedback before submitting.")
-                    st.markdown('</div>', unsafe_allow_html=True)
 
-        # View all feedback tab
+        # View all feedback tab with improved styling
         if st.session_state.is_owner:
             with tab2:
-                st.markdown('<h2 style="color: #5a7d7c;">All Feedback</h2>', unsafe_allow_html=True)
+                st.markdown(f"""
+                <h2 style="color: {BRAND_COLOR}; margin-bottom: 20px;">
+                    <span style="margin-right: 10px;">📋</span> All Customer Feedback
+                </h2>
+                <p style="font-size: 16px; margin-bottom: 20px;">
+                    Review all customer feedback to identify trends and improvement opportunities.
+                </p>
+                """, unsafe_allow_html=True)
                 
                 # Get total count first for reference
                 all_reviews_total = load_reviews_from_db()
@@ -1110,13 +1451,23 @@ def main():
                     # Sort reviews by timestamp
                     sorted_reviews = sorted(all_reviews, key=lambda x: x.get('timestamp', ''), reverse=True)
                     
-                    # Filter controls
-                    st.markdown('<div class="card-container">', unsafe_allow_html=True)
-                    search_input = st.text_input("Search reviews by keyword:")
+                    # Filter controls with improved styling
+                    st.markdown(f"""
+                    <div style="background-color: white; padding: 20px; border-radius: 10px; 
+                         box-shadow: 0 4px 12px rgba(0,0,0,0.05); margin-bottom: 20px;">
+                        <h3 style="color: {BRAND_COLOR}; margin-top: 0; margin-bottom: 15px; font-size: 18px;">
+                            <span style="margin-right: 8px;">🔍</span> Filter Reviews
+                        </h3>
+                    </div>
+                    """, unsafe_allow_html=True)
+                    
+                    search_input = st.text_input("Search reviews by keyword:", placeholder="Type to search...")
                     
                     # Sentiment filter
-                    sentiment_options = ["All"] + [str(i) for i in range(1, 6)]
-                    selected_sentiment = st.selectbox("Filter by sentiment score:", sentiment_options)
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        sentiment_options = ["All"] + [str(i) for i in range(1, 6)]
+                        selected_sentiment = st.selectbox("Filter by sentiment score:", sentiment_options)
                     
                     # Date filter
                     col_date1, col_date2 = st.columns(2)
@@ -1130,7 +1481,6 @@ def main():
                     with col_date2:
                         max_date = max(dates).date() if dates else datetime.now().date()
                         end_date = st.date_input("To date:", max_date)
-                    st.markdown('</div>', unsafe_allow_html=True)
                     
                     # Apply filters
                     filtered_reviews = []
@@ -1154,61 +1504,163 @@ def main():
                         filtered_reviews.append(review)
                     
                     # Display count with message about limit
-                    if total_reviews_count > 20:
-                        st.write(f"Showing up to 20 most recent reviews (out of {total_reviews_count} total)")
-                    else:
-                        st.write(f"Showing {len(filtered_reviews)} out of {total_reviews_count} total reviews")
+                    st.markdown(f"""
+                    <div style="background-color: #f8f9fa; padding: 15px; border-radius: 8px; margin: 20px 0;">
+                        <p style="margin: 0; font-size: 16px;">
+                    """, unsafe_allow_html=True)
                     
-                    # Display filtered reviews
+                    if total_reviews_count > 20:
+                        st.markdown(f"Showing up to 20 most recent reviews (out of {total_reviews_count} total)")
+                    else:
+                        st.markdown(f"Showing {len(filtered_reviews)} out of {total_reviews_count} total reviews")
+                    
+                    st.markdown("</p></div>", unsafe_allow_html=True)
+                    
+                    # Display filtered reviews with improved styling
                     for review in filtered_reviews:
                         display_date = format_date(review.get('timestamp', 'Unknown date'))
 
                         with st.expander(f"Review from {display_date}"):
-                            st.markdown('<div class="card-container">', unsafe_allow_html=True)
-                            
-                            # Customer info
-                            if review.get('customer_name'):
-                                st.write(f"**Customer**: {review['customer_name']}")
-                            if review.get('customer_email'):
-                                st.write(f"**Email**: {review['customer_email']}")
-                            if review.get('customer_phone'):
-                                st.write(f"**Phone**: {review['customer_phone']}")
+                            st.markdown(f"""
+                            <div style="background-color: white; padding: 20px; border-radius: 10px; 
+                                 box-shadow: 0 2px 5px rgba(0,0,0,0.05); margin-bottom: 10px;">
+                                <div style="display: flex; flex-wrap: wrap; margin-bottom: 15px; 
+                                     padding-bottom: 15px; border-bottom: 1px solid #f0f0f0;">
+                                    <div style="flex: 1; min-width: 200px; margin-bottom: 10px;">
+                                        <p style="margin: 0; color: #666; font-size: 14px;">Customer</p>
+                                        <p style="margin: 0; font-weight: 500; font-size: 16px;">
+                                            {review.get('customer_name', 'Anonymous')}
+                                        </p>
+                                    </div>
+                                    <div style="flex: 1; min-width: 200px; margin-bottom: 10px;">
+                                        <p style="margin: 0; color: #666; font-size: 14px;">Email</p>
+                                        <p style="margin: 0; font-weight: 500; font-size: 16px;">
+                                            {review.get('customer_email', 'N/A')}
+                                        </p>
+                                    </div>
+                                    <div style="flex: 1; min-width: 200px; margin-bottom: 10px;">
+                                        <p style="margin: 0; color: #666; font-size: 14px;">Phone</p>
+                                        <p style="margin: 0; font-weight: 500; font-size: 16px;">
+                                            {review.get('customer_phone', 'Not provided')}
+                                        </p>
+                                    </div>
+                                </div>
+                            """, unsafe_allow_html=True)
                             
                             # Review details
-                            st.write(f"**Summary**: {review.get('summary', 'N/A')}")
-                            st.write(f"**Food Quality**: {review.get('food_quality', 'N/A')}")
-                            st.write(f"**Service**: {review.get('service', 'N/A')}")
-                            st.write(f"**Atmosphere**: {review.get('atmosphere', 'N/A')}")
-                            st.write(f"**Music & Entertainment**: {review.get('music_and_entertainment', 'N/A')}")
-
+                            col1, col2 = st.columns(2)
                             
-                            # Sentiment display with animated stars
-                            sentiment = review.get('sentiment_score', 'N/A')
-                            if isinstance(sentiment, (int, float)):
-                                animated_stars = display_animated_stars(sentiment, show_number=True)
-                                st.markdown(f"**Sentiment Score**: {animated_stars}", unsafe_allow_html=True)
-                            else:
-                                st.write(f"**Sentiment Score**: {sentiment}/5")                    
+                            with col1:
+                                st.markdown(f"""
+                                <div style="background-color: #f8f9fa; padding: 15px; border-radius: 8px; margin-bottom: 15px;">
+                                    <h4 style="color: {BRAND_COLOR}; margin-top: 0; margin-bottom: 10px; font-size: 16px;">
+                                        Summary
+                                    </h4>
+                                    <p style="margin: 0;">{review.get('summary', 'N/A')}</p>
+                                </div>
+                                """, unsafe_allow_html=True)
+                                
+                                # Sentiment display with animated stars
+                                sentiment = review.get('sentiment_score', 'N/A')
+                                if isinstance(sentiment, (int, float)):
+                                    animated_stars = display_animated_stars(sentiment, show_number=True)
+                                    st.markdown(f"""
+                                    <div style="background-color: #f8f9fa; padding: 15px; border-radius: 8px; margin-bottom: 15px; text-align: center;">
+                                        <h4 style="color: {BRAND_COLOR}; margin-top: 0; margin-bottom: 10px; font-size: 16px;">
+                                            Sentiment Score
+                                        </h4>
+                                        {animated_stars}
+                                    </div>
+                                    """, unsafe_allow_html=True)
+                                else:
+                                    st.write(f"**Sentiment Score**: {sentiment}/5")
+                            
+                            with col2:
+                                st.markdown(f"""
+                                <div style="background-color: #f8f9fa; padding: 15px; border-radius: 8px; margin-bottom: 15px;">
+                                    <h4 style="color: {BRAND_COLOR}; margin-top: 0; margin-bottom: 10px; font-size: 16px;">
+                                        Food Quality
+                                    </h4>
+                                    <p style="margin: 0;">{review.get('food_quality', 'N/A')}</p>
+                                </div>
+                                """, unsafe_allow_html=True)
+                                
+                                st.markdown(f"""
+                                <div style="background-color: #f8f9fa; padding: 15px; border-radius: 8px; margin-bottom: 15px;">
+                                    <h4 style="color: {BRAND_COLOR}; margin-top: 0; margin-bottom: 10px; font-size: 16px;">
+                                        Service
+                                    </h4>
+                                    <p style="margin: 0;">{review.get('service', 'N/A')}</p>
+                                </div>
+                                """, unsafe_allow_html=True)
+                            
+                            col3, col4 = st.columns(2)
+                            
+                            with col3:
+                                st.markdown(f"""
+                                <div style="background-color: #f8f9fa; padding: 15px; border-radius: 8px; margin-bottom: 15px;">
+                                    <h4 style="color: {BRAND_COLOR}; margin-top: 0; margin-bottom: 10px; font-size: 16px;">
+                                        Atmosphere
+                                    </h4>
+                                    <p style="margin: 0;">{review.get('atmosphere', 'N/A')}</p>
+                                </div>
+                                """, unsafe_allow_html=True)
+                            
+                            with col4:
+                                st.markdown(f"""
+                                <div style="background-color: #f8f9fa; padding: 15px; border-radius: 8px; margin-bottom: 15px;">
+                                    <h4 style="color: {BRAND_COLOR}; margin-top: 0; margin-bottom: 10px; font-size: 16px;">
+                                        Music & Entertainment
+                                    </h4>
+                                    <p style="margin: 0;">{review.get('music_and_entertainment', 'N/A')}</p>
+                                </div>
+                                """, unsafe_allow_html=True)
+                            
                             # Display key points
                             if 'specific_points' in review:
-                                st.write("**Key Points:**")
+                                st.markdown(f"""
+                                <div style="background-color: #f8f9fa; padding: 15px; border-radius: 8px; margin-bottom: 15px;">
+                                    <h4 style="color: {BRAND_COLOR}; margin-top: 0; margin-bottom: 10px; font-size: 16px;">
+                                        Key Points
+                                    </h4>
+                                    <ul style="margin-bottom: 0; padding-left: 20px;">
+                                """, unsafe_allow_html=True)
+                                
                                 display_list_items(review.get('specific_points', []))
+                                
+                                st.markdown("</ul></div>", unsafe_allow_html=True)
 
                             # Display suggestions
                             if 'improvement_suggestions' in review:
-                                st.write("**Suggestions for Improvement:**")
+                                st.markdown(f"""
+                                <div style="background-color: #f8f9fa; padding: 15px; border-radius: 8px; margin-bottom: 15px;">
+                                    <h4 style="color: {BRAND_COLOR}; margin-top: 0; margin-bottom: 10px; font-size: 16px;">
+                                        Suggestions for Improvement
+                                    </h4>
+                                    <ul style="margin-bottom: 0; padding-left: 20px;">
+                                """, unsafe_allow_html=True)
+                                
                                 display_list_items(review.get('improvement_suggestions', []))
+                                
+                                st.markdown("</ul></div>", unsafe_allow_html=True)
                                 
                             # Show transcription
                             if 'raw_transcription' in review:
-                                st.write("**Original Transcription:**")
-                                st.text(review['raw_transcription'])
+                                with st.expander("View Original Transcription"):
+                                    st.text(review['raw_transcription'])
                             
-                            st.markdown('</div>', unsafe_allow_html=True)
+                            st.markdown("</div>", unsafe_allow_html=True)
         
-        # My Feedback tab
+        # My Feedback tab with improved styling
         with tab3:
-            st.markdown('<h2 style="color: #5a7d7c;">My Feedback History</h2>', unsafe_allow_html=True)
+            st.markdown(f"""
+            <h2 style="color: {BRAND_COLOR}; margin-bottom: 20px;">
+                <span style="margin-right: 10px;">👤</span> My Feedback History
+            </h2>
+            <p style="font-size: 16px; margin-bottom: 20px;">
+                View all the feedback you've submitted to our restaurant.
+            </p>
+            """, unsafe_allow_html=True)
             
             # Get user ID
             user_id = st.session_state.customer_id
@@ -1224,48 +1676,140 @@ def main():
                 st.info("You haven't submitted any feedback yet.")
             else:
                 # Display count with message about limit
-                if total_user_reviews_count > 10:
-                    st.write(f"Showing your 10 most recent reviews (out of {total_user_reviews_count} total)")
-                else:
-                    st.write(f"You have submitted {total_user_reviews_count} reviews.")
+                st.markdown(f"""
+                <div style="background-color: #f8f9fa; padding: 15px; border-radius: 8px; margin: 20px 0;">
+                    <p style="margin: 0; font-size: 16px;">
+                """, unsafe_allow_html=True)
                 
-                # Display user reviews
+                if total_user_reviews_count > 10:
+                    st.markdown(f"Showing your 10 most recent reviews (out of {total_user_reviews_count} total)")
+                else:
+                    st.markdown(f"You have submitted {total_user_reviews_count} reviews.")
+                
+                st.markdown("</p></div>", unsafe_allow_html=True)
+                
+                # Display user reviews with improved styling
                 for i, review in enumerate(user_reviews):
                     display_date = format_date(review.get('timestamp', 'Unknown date'))
 
                     with st.expander(f"Review {i+1} - {display_date}"):
-                        st.markdown('<div class="card-container">', unsafe_allow_html=True)
+                        st.markdown(f"""
+                        <div style="background-color: white; padding: 20px; border-radius: 10px; 
+                             box-shadow: 0 2px 5px rgba(0,0,0,0.05); margin-bottom: 10px;">
+                        """, unsafe_allow_html=True)
                         
                         # Review details
-                        st.write(f"**Summary**: {review.get('summary', 'N/A')}")
-                        st.write(f"**Food Quality**: {review.get('food_quality', 'N/A')}")
-                        st.write(f"**Service**: {review.get('service', 'N/A')}")
-                        st.write(f"**Atmosphere**: {review.get('atmosphere', 'N/A')}")
-                        st.write(f"**Music & Entertainment**: {review.get('music_and_entertainment', 'N/A')}")
+                        col1, col2 = st.columns(2)
                         
-                        # Sentiment display with animated stars
-                        sentiment = review.get('sentiment_score', 'N/A')
-                        if isinstance(sentiment, (int, float)):
-                            animated_stars = display_animated_stars(sentiment, show_number=True)
-                            st.markdown(f"**Sentiment Score**: {animated_stars}", unsafe_allow_html=True)
-                        else:
-                            st.write(f"**Sentiment Score**: {sentiment}/5")                    
+                        with col1:
+                            st.markdown(f"""
+                            <div style="background-color: #f8f9fa; padding: 15px; border-radius: 8px; margin-bottom: 15px;">
+                                <h4 style="color: {BRAND_COLOR}; margin-top: 0; margin-bottom: 10px; font-size: 16px;">
+                                    Summary
+                                </h4>
+                                <p style="margin: 0;">{review.get('summary', 'N/A')}</p>
+                            </div>
+                            """, unsafe_allow_html=True)
+                            
+                            # Sentiment display with animated stars
+                            sentiment = review.get('sentiment_score', 'N/A')
+                            if isinstance(sentiment, (int, float)):
+                                animated_stars = display_animated_stars(sentiment, show_number=True)
+                                st.markdown(f"""
+                                <div style="background-color: #f8f9fa; padding: 15px; border-radius: 8px; margin-bottom: 15px; text-align: center;">
+                                    <h4 style="color: {BRAND_COLOR}; margin-top: 0; margin-bottom: 10px; font-size: 16px;">
+                                        Sentiment Score
+                                    </h4>
+                                    {animated_stars}
+                                </div>
+                                """, unsafe_allow_html=True)
+                            else:
+                                st.write(f"**Sentiment Score**: {sentiment}/5")
+                        
+                        with col2:
+                            st.markdown(f"""
+                            <div style="background-color: #f8f9fa; padding: 15px; border-radius: 8px; margin-bottom: 15px;">
+                                <h4 style="color: {BRAND_COLOR}; margin-top: 0; margin-bottom: 10px; font-size: 16px;">
+                                    Food Quality
+                                </h4>
+                                <p style="margin: 0;">{review.get('food_quality', 'N/A')}</p>
+                            </div>
+                            """, unsafe_allow_html=True)
+                            
+                            st.markdown(f"""
+                            <div style="background-color: #f8f9fa; padding: 15px; border-radius: 8px; margin-bottom: 15px;">
+                                <h4 style="color: {BRAND_COLOR}; margin-top: 0; margin-bottom: 10px; font-size: 16px;">
+                                    Service
+                                </h4>
+                                <p style="margin: 0;">{review.get('service', 'N/A')}</p>
+                            </div>
+                            """, unsafe_allow_html=True)
+                        
+                        col3, col4 = st.columns(2)
+                        
+                        with col3:
+                            st.markdown(f"""
+                            <div style="background-color: #f8f9fa; padding: 15px; border-radius: 8px; margin-bottom: 15px;">
+                                <h4 style="color: {BRAND_COLOR}; margin-top: 0; margin-bottom: 10px; font-size: 16px;">
+                                    Atmosphere
+                                </h4>
+                                <p style="margin: 0;">{review.get('atmosphere', 'N/A')}</p>
+                            </div>
+                            """, unsafe_allow_html=True)
+                        
+                        with col4:
+                            st.markdown(f"""
+                            <div style="background-color: #f8f9fa; padding: 15px; border-radius: 8px; margin-bottom: 15px;">
+                                <h4 style="color: {BRAND_COLOR}; margin-top: 0; margin-bottom: 10px; font-size: 16px;">
+                                    Music & Entertainment
+                                </h4>
+                                <p style="margin: 0;">{review.get('music_and_entertainment', 'N/A')}</p>
+                            </div>
+                            """, unsafe_allow_html=True)
                         
                         # Display key points
                         if 'specific_points' in review:
-                            st.write("**Key Points:**")
+                            st.markdown(f"""
+                            <div style="background-color: #f8f9fa; padding: 15px; border-radius: 8px; margin-bottom: 15px;">
+                                <h4 style="color: {BRAND_COLOR}; margin-top: 0; margin-bottom: 10px; font-size: 16px;">
+                                    Key Points
+                                </h4>
+                                <ul style="margin-bottom: 0; padding-left: 20px;">
+                            """, unsafe_allow_html=True)
+                            
                             display_list_items(review.get('specific_points', []))
+                            
+                            st.markdown("</ul></div>", unsafe_allow_html=True)
 
                         # Display suggestions
                         if 'improvement_suggestions' in review:
-                            st.write("**Suggestions for Improvement:**")
+                            st.markdown(f"""
+                            <div style="background-color: #f8f9fa; padding: 15px; border-radius: 8px; margin-bottom: 15px;">
+                                <h4 style="color: {BRAND_COLOR}; margin-top: 0; margin-bottom: 10px; font-size: 16px;">
+                                    Suggestions for Improvement
+                                </h4>
+                                <ul style="margin-bottom: 0; padding-left: 20px;">
+                            """, unsafe_allow_html=True)
+                            
                             display_list_items(review.get('improvement_suggestions', []))
+                            
+                            st.markdown("</ul></div>", unsafe_allow_html=True)
                             
                         # Show transcription
                         if 'raw_transcription' in review:
-                            st.write("**Original Transcription:**")
-                            st.text(review['raw_transcription'])
+                            with st.expander("View Original Transcription"):
+                                st.text(review['raw_transcription'])
                         
-                        st.markdown('</div>', unsafe_allow_html=True)
+                        st.markdown("</div>", unsafe_allow_html=True)
+
+    # Footer with improved styling
+    st.markdown(f"""
+    <div style="text-align: center; margin-top: 50px; padding: 20px; border-top: 1px solid #e0e0e0;">
+        <p style="color: #666; font-size: 14px;">
+            Thank you for sharing your feedback! • © {datetime.now().year} Restaurant Feedback System
+        </p>
+    </div>
+    """, unsafe_allow_html=True)
+
 if __name__ == "__main__":
     main()
