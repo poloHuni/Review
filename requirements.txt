@@ -9,4 +9,4 @@ openpyxl==3.1.5
 extra-streamlit-components==0.1.71
 openai==1.63.2
 pydub==0.25.1
-streamlit_nested_layout==0.1.2
+streamlit-nested-layout==0.1.4
