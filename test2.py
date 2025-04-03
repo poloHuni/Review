@@ -1361,7 +1361,7 @@ def main():
             # Only show logo without the title on login page
             col1, col2 = st.columns([1, 5])
             with col1:
-                st.image("Vintage Colorful Retro Vibes Typographic Product Brand Logo.png", width=80)
+                st.image(r"C:\Users\Michael\Downloads\Vintage Colorful Retro Vibes Typographic Product Brand Logo.png", width=80)
             
             # User is not logged in, show login form
             render_login_form()
@@ -1372,7 +1372,7 @@ def main():
             # User is logged in - show full header with title
             col1, col2 = st.columns([1, 5])
             with col1:
-                st.image("Vintage Colorful Retro Vibes Typographic Product Brand Logo.png", width=80)
+                st.image(r"C:\Users\Michael\Downloads\Vintage Colorful Retro Vibes Typographic Product Brand Logo.png", width=80)
             with col2:
                 st.title("Restaurant Feedback Portal")
             
