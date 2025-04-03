@@ -10,3 +10,7 @@ extra-streamlit-components==0.1.71
 openai==1.63.2
 pydub==0.25.1
 streamlit-nested-layout==0.1.4
+google-auth==2.22.0
+google-auth-oauthlib==1.0.0
+google-api-python-client==2.95.0
+requests-oauthlib==1.3.1
