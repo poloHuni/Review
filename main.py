@@ -15,6 +15,14 @@ from datetime import datetime, timedelta
 from dotenv import load_dotenv
 import re
 import extra_streamlit_components as stx
+import streamlit_nested_layout
+
+# Google OAuth imports
+from google_auth_oauthlib.flow import Flow
+from google.oauth2.credentials import Credentials
+from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
+import pathlib
 
 # Constants
 OWNER_EMAIL = "natnaelgebremichaeltewelde@gmail.com"
@@ -22,8 +30,220 @@ BRAND_COLOR = "#f8f9fa"
 ACCENT_COLOR = "#e53935"
 LIGHT_COLOR = "#5a7d7c"
 
-# Load environment variables
+# Google OAuth config
+GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "")
+GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET", "")
+GOOGLE_REDIRECT_URI = os.environ.get("GOOGLE_REDIRECT_URI", "http://localhost:8501")
+GOOGLE_SCOPES = [
+    'openid',  # Add this scope to match what Google automatically includes
+    'https://www.googleapis.com/auth/userinfo.email',
+    'https://www.googleapis.com/auth/userinfo.profile',
+    'https://www.googleapis.com/auth/business.manage'  # For Google Business Profile (Reviews)
+]
+
 load_dotenv()
+
+# Setup Google OAuth flow
+def create_google_oauth_flow():
+    """Create a new OAuth flow instance"""
+    client_config = {
+        "web": {
+            "client_id": GOOGLE_CLIENT_ID,
+            "client_secret": GOOGLE_CLIENT_SECRET,
+            "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+            "token_uri": "https://oauth2.googleapis.com/token",
+            "redirect_uris": [GOOGLE_REDIRECT_URI]
+        }
+    }
+    
+    # Verify client credentials are available
+    if not GOOGLE_CLIENT_ID or not GOOGLE_CLIENT_SECRET:
+        st.error("Google OAuth credentials are missing. Check your environment variables.")
+        st.stop()
+    
+    # Create flow with all required parameters
+    flow = Flow.from_client_config(
+        client_config=client_config,
+        scopes=GOOGLE_SCOPES
+    )
+    
+    # Set the redirect_uri explicitly
+    flow.redirect_uri = GOOGLE_REDIRECT_URI
+    
+    return flow
+
+def get_google_oauth_url():
+    """Generate the authorization URL for Google OAuth"""
+    flow = create_google_oauth_flow()
+    
+    # Generate a random state parameter for additional security
+    import secrets
+    state = secrets.token_urlsafe(16)
+    st.session_state.oauth_state = state
+    
+    # Explicitly include the openid scope in both authorization and token steps
+    auth_url, _ = flow.authorization_url(
+        access_type='offline',
+        include_granted_scopes='true',
+        prompt='consent',
+        state=state
+    )
+    
+    # Save the scopes that were used in the authorization request
+    st.session_state.oauth_scopes = flow.oauth2session.scope
+    
+    return auth_url
+
+def process_oauth_callback(code):
+    """Process the OAuth callback code and get user info"""
+    try:
+        flow = create_google_oauth_flow()
+        flow.redirect_uri = GOOGLE_REDIRECT_URI
+        
+        st.write(f"Debug - Attempting token exchange with code length: {len(code)}")
+        
+        # Adding parameters to handle scope mismatch
+        token_info = flow.fetch_token(
+            code=code,
+            # Include these parameters
+            include_client_id=True,
+            # Tell the library not to verify scopes, which allows for scope differences
+            verify_scope=False
+        )
+        
+        st.write("Debug - Token exchange successful")
+        st.write(f"Debug - Access token received (length: {len(token_info.get('access_token', ''))})")
+        
+        credentials = flow.credentials
+        
+        # Get user info
+        user_info = get_google_user_info(credentials)
+        
+        if user_info:
+            st.write(f"Debug - User info retrieved: {user_info.get('email')}")
+            
+            # Create or update user in database
+            user_id = str(uuid.uuid4())
+            existing_user = find_user_by_email(user_info.get('email', ''))
+            
+            if existing_user:
+                user_id = existing_user.get('user_id')
+                st.write(f"Debug - Existing user found with ID: {user_id}")
+            else:
+                st.write(f"Debug - Creating new user with ID: {user_id}")
+            
+            user_data = {
+                "user_id": user_id,
+                "username": user_info.get('email', '').split('@')[0],
+                "email": user_info.get('email', ''),
+                "phone": existing_user.get('phone', '') if existing_user else '',
+                "name": user_info.get('name', ''),
+                "last_login": datetime.now().isoformat(),
+                "registration_date": existing_user.get('registration_date', datetime.now().isoformat()) if existing_user else datetime.now().isoformat(),
+                "google_id": user_info.get('id', ''),
+                "picture": user_info.get('picture', ''),
+                "credentials": credentials_to_dict(credentials)
+            }
+            
+            if save_user(user_data):
+                st.write("Debug - User saved successfully")
+                
+                # Set cookie
+                cookie_manager = get_cookie_manager()
+                cookie_manager.set(
+                    cookie="user_id", 
+                    val=user_id,
+                    expires_at=datetime.now() + timedelta(days=30)
+                )
+                
+                # Update session state
+                st.session_state.is_logged_in = True
+                st.session_state.current_user = user_data
+                st.session_state.customer_id = user_id
+                st.session_state.customer_info = {
+                    "name": user_info.get('name', ''),
+                    "email": user_info.get('email', ''),
+                    "phone": existing_user.get('phone', '') if existing_user else ''
+                }
+                
+                # Check if this user is the owner
+                st.session_state.is_owner = (user_info.get('email', '').lower() == OWNER_EMAIL.lower())
+                
+                return True
+            else:
+                st.error("Failed to save user data")
+        else:
+            st.error("Failed to get user info")
+        
+        return False
+    except Exception as e:
+        st.error(f"OAuth error: {str(e)}")
+        st.error(f"Error type: {type(e).__name__}")
+        
+        # More specific error handling
+        if "invalid_grant" in str(e).lower():
+            st.error("The authorization code has expired or already been used. Please try logging in again.")
+        elif "redirect_uri_mismatch" in str(e).lower():
+            st.error(f"Redirect URI mismatch. Expected: {GOOGLE_REDIRECT_URI}")
+        elif "scope" in str(e).lower():
+            st.error("OAuth scope mismatch. This is likely due to Google automatically adding scopes.")
+        
+        import traceback
+        st.error(traceback.format_exc())
+        return False
+        # Get Google user info
+def get_google_user_info(credentials):
+    try:
+        service = build('oauth2', 'v2', credentials=credentials)
+        user_info = service.userinfo().get().execute()
+        return user_info
+    except HttpError as e:
+        st.error(f"Error getting user info: {str(e)}")
+        return None
+
+# Convert credentials to dict for storage
+def credentials_to_dict(credentials):
+    return {
+        'token': credentials.token,
+        'refresh_token': credentials.refresh_token,
+        'token_uri': credentials.token_uri,
+        'client_id': credentials.client_id,
+        'client_secret': credentials.client_secret,
+        'scopes': credentials.scopes
+    }
+
+# Convert dict to credentials
+def dict_to_credentials(credentials_dict):
+    return Credentials(
+        token=credentials_dict.get('token', ''),
+        refresh_token=credentials_dict.get('refresh_token', ''),
+        token_uri=credentials_dict.get('token_uri', 'https://oauth2.googleapis.com/token'),
+        client_id=credentials_dict.get('client_id', GOOGLE_CLIENT_ID),
+        client_secret=credentials_dict.get('client_secret', GOOGLE_CLIENT_SECRET),
+        scopes=credentials_dict.get('scopes', GOOGLE_SCOPES)
+    )
+# Post review to Google
+def post_to_google_reviews(review_data, user):
+    try:
+        if not user or 'credentials' not in user:
+            return False, "User credentials not found"
+            
+        credentials = dict_to_credentials(user['credentials'])
+        
+        # This is a simplified example - actual implementation requires Google My Business API
+        # which has specific requirements and limitations
+        # Usually this would be done through the Google My Business API
+        
+        # For now, we'll just log that we would post to Google
+        st.success("Your review would be posted to Google Reviews!")
+        
+        # In a real implementation, you would use the Google My Business API
+        # to post the review to the business's Google profile
+        
+        return True, "Review posted successfully"
+    except Exception as e:
+        return False, f"Error posting to Google: {str(e)}"
+
 
 # Database functions (unchanged)
 def load_reviews_from_db(limit=None):
@@ -230,26 +450,44 @@ def init_session_state():
         
 # Login form - Enhanced with better styling
 def render_login_form():
-    st.markdown(f"""
-    <div class="login-container">
-        <h2 style="color: #FFFFFF; text-align: center; margin-bottom: 30px;">
-            <span style="font-size: 32px;">👋</span> Welcome to Our Feedback Portal
-        </h2>
-        
-        <div class="login-section">
-            <h3 style="color: #FFFFFF; font-size: 22px; margin-bottom: 15px;">Login</h3>
-            <p style="margin-bottom: 20px; color: #CCCCCC;">Access your account to view your previous feedback and submit new reviews.</p>
-        </div>
+    # Use Streamlit's native components instead of custom HTML/CSS
+    st.markdown("""
+    <div style="text-align: center; margin-bottom: 30px;">
+        <span style="font-size: 32px;">👋</span>
+        <h1 style="color: #FFFFFF; margin-top: 10px;">Welcome to my Feedback Portal</h1>
     </div>
     """, unsafe_allow_html=True)
     
-    # Create a card-like container for the login form
+    # Create a card-like container for the login form using Streamlit components
     with st.container():
         col1, col2, col3 = st.columns([1, 3, 1])
         with col2:
+            # Login section
+            st.subheader("Login")
+            st.markdown("<p style='color: #CCCCCC;'>Access your account to share your feedback and see your previous reviews.</p>", 
+                       unsafe_allow_html=True)
+            
+            # Google Sign-In button
+            google_auth_url = get_google_oauth_url()
+            st.markdown(f"""
+            <div style="text-align: center; margin: 20px 0;">
+                <a href="{google_auth_url}" target="_self" style="text-decoration: none;">
+                    <div style="background-color: white; color: #444; padding: 10px 20px; border-radius: 4px; 
+                         display: inline-flex; align-items: center; font-family: 'Roboto', sans-serif; 
+                         font-weight: 500; box-shadow: 0 2px 4px rgba(0,0,0,0.25);">
+                        <img src="https://developers.google.com/identity/images/g-logo.png" 
+                             style="height: 24px; margin-right: 10px;">
+                        Sign in with Google
+                    </div>
+                </a>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            st.markdown("<p style='text-align: center; color: #999; margin: 15px 0;'>- or -</p>", unsafe_allow_html=True)
+            
             with st.form("login_form", border=False):
                 email = st.text_input("Email Address", key="login_email")
-                submit_login = st.form_submit_button("Login", use_container_width=True)
+                submit_login = st.form_submit_button("Login with Email", use_container_width=True)
                 
                 if submit_login:
                     # Normalize email to lowercase for case-insensitive comparison
@@ -290,18 +528,15 @@ def render_login_form():
         with col2:
             st.error(st.session_state.login_error)
     
-    # Registration section
-    st.markdown(f"""
-    <div class="login-container" style="margin-top: 30px;">
-        <div class="register-section">
-            <h3 style="color: #FFFFFF; font-size: 22px; margin-bottom: 15px;">New User? Register Here</h3>
-            <p style="margin-bottom: 20px; color: #CCCCCC;">Create an account to start sharing your dining experiences with us.</p>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
+    # Registration section - completely redesigned to avoid any class issues
+    st.markdown("<hr style='margin: 30px 0;'>", unsafe_allow_html=True)
     
     col1, col2, col3 = st.columns([1, 3, 1])
     with col2:
+        st.subheader("New User? Register Here")
+        st.markdown("<p style='color: #CCCCCC;'>Create an account to start sharing your dining experiences with me.</p>", 
+                   unsafe_allow_html=True)
+        
         with st.form("register_form", border=False):
             name = st.text_input("Full Name")
             email = st.text_input("Email Address")
@@ -359,7 +594,6 @@ def render_login_form():
                             st.rerun()
                         else:
                             st.error("Error during registration. Please try again.")
-
 # Check if user is logged in via cookie
 def check_login_status():
     if st.session_state.is_logged_in:
@@ -426,22 +660,22 @@ def initialize_conversation():
 
 def validate_review_input(text):
     if len(text.strip()) < 10:
-        return False, "Your feedback seems too short. Please provide more details about your experience."
+        return False, "Your feedback seems too short. Please share more details about your experience."
     
     initialize_conversation()
     
     validation_prompt = f"""
-    You need to determine if the following text is a valid restaurant review/feedback or not.
+    You need to determine if the following text is valid feedback about a restaurant or not.
     
     Text: "{text}"
     
-    A valid restaurant review typically mentions food, service, atmosphere, or specific experiences at a restaurant.
-    Greetings, questions about the system, or unrelated conversations are NOT valid reviews.
+    Valid feedback typically mentions food, service, atmosphere, or specific experiences at a restaurant.
+    Greetings, questions about the system, or unrelated conversations are NOT valid feedback.
     
     Return a JSON object with this format:
     {{
         "is_valid": true/false,
-        "reason": "Brief explanation of why it is or isn't a valid review",
+        "reason": "Brief explanation of why it is or isn't valid feedback",
         "review_elements": ["food", "service", "atmosphere", "experience"] (include only those that are present)
     }}
     
@@ -465,8 +699,8 @@ def validate_review_input(text):
         
         return (is_valid, None) if is_valid else (False, reason)
     except Exception:
-        return False, "Unable to validate your feedback. Please ensure you're providing restaurant-related feedback."
-
+        return False, "I couldn't validate your feedback. Please make sure you're sharing thoughts about your restaurant experience."
+    
 def process_and_validate_review(text):
     if not text:
         return None, "Please provide some feedback."
@@ -502,6 +736,58 @@ def process_audio_file(input_file_path):
     except Exception as e:
         st.warning(f"Audio processing failed, using original audio: {str(e)}")
         return input_file_path
+
+def generate_google_review_link(review_data, place_id):
+    """
+    Generate a URL that directs users to Google Reviews with pre-filled content.
+    
+    Args:
+        review_data: The processed review data dictionary
+        place_id: Your Google Business Profile Place ID
+    
+    Returns:
+        str: URL to Google Review page with pre-filled content
+    """
+    # Extract key components from the review
+    summary = review_data.get('summary', '')
+    food_quality = review_data.get('food_quality', '')
+    service = review_data.get('service', '')
+    atmosphere = review_data.get('atmosphere', '')
+    
+    # Create a formatted review text
+    review_text = f"{summary}\n\n"
+    
+    if food_quality and food_quality != "N/A":
+        review_text += f"Food: {food_quality}\n"
+    if service and service != "N/A":
+        review_text += f"Service: {service}\n"
+    if atmosphere and atmosphere != "N/A":
+        review_text += f"Atmosphere: {atmosphere}\n"
+    
+    # Add specific points if available
+    if 'specific_points' in review_data and review_data['specific_points']:
+        review_text += "\nHighlights:\n"
+        if isinstance(review_data['specific_points'], list):
+            for point in review_data['specific_points']:
+                if point and point != "N/A":
+                    review_text += f"- {point}\n"
+        elif isinstance(review_data['specific_points'], str):
+            # Handle string representation of list
+            points = review_data['specific_points'].strip("[]").split(',')
+            for point in points:
+                clean_point = point.strip().strip("'").strip('"')
+                if clean_point and clean_point != "N/A":
+                    review_text += f"- {clean_point}\n"
+    
+    # URL encode the review text
+    import urllib.parse
+    encoded_review = urllib.parse.quote(review_text)
+    
+    # Create the Google review URL with the place ID and pre-filled review
+    # Note: The 'review' URL parameter isn't officially documented by Google, but works in many cases
+    review_url = f"https://search.google.com/local/writereview?placeid={place_id}&review={encoded_review}"
+    
+    return review_url
 
 def transcribe_audio(audio_file_path):
     try:
@@ -587,7 +873,7 @@ def record_audio():
         # Show recorder
         with recorder_container:
             audio_bytes = audio_recorder(
-                text="Press and hold to record",
+                text="Click to begin/end recording",
                 recording_color=ACCENT_COLOR,
                 neutral_color=BRAND_COLOR,
                 icon_name="microphone",
@@ -696,72 +982,163 @@ def record_audio():
                     st.rerun()
     
     return None
+
 def process_review(transcribed_text):
     if not transcribed_text:
         return None
     
     initialize_conversation()
     
+    # Updated prompt with more explicit JSON formatting instructions
     prompt = f"""
-    You are analyzing a customer's feedback for a bar and restaurant that features live DJs and music. 
-    Please summarize this feedback, extracting key points about the overall experience, food quality, 
-    service, atmosphere (including music and entertainment), and any specific recommendations or complaints. 
-    Also, rate the overall sentiment on a scale of 1-5.
+    I want you to analyze my feedback for this bar and restaurant which features live DJs and music.
+    The feedback was: "{transcribed_text}"
     
-    Customer feedback: {transcribed_text}
+    Format this feedback as a first-person review that I can copy and paste directly to Google Reviews.
+    All assessments, opinions, and points should be written in first-person (using "I", "my", "me").
     
-    Provide your analysis in the following JSON format. Make sure to escape any quotes within the text fields:
+    For example, instead of "The customer enjoyed the food" write "I enjoyed the food".
+    Instead of "The customer thought the music was too loud" write "I thought the music was too loud".
+    
+    Provide your analysis in the following JSON format:
     {{
-        "summary": "Brief summary of the overall experience",
-        "food_quality": "Assessment of food and drinks",
-        "service": "Assessment of service quality",
-        "atmosphere": "Assessment of ambiance, music, and entertainment",
-        "music_and_entertainment": "Specific feedback on DJs, music selection, and overall vibe",
-        "specific_points": ["Point 1", "Point 2", "..."],
-        "sentiment_score": X,
-        "improvement_suggestions": ["Suggestion 1", "Suggestion 2", "..."]
+        "summary": "A brief first-person summary of my overall experience",
+        "food_quality": "My assessment of food and drinks",
+        "service": "My assessment of service quality",
+        "atmosphere": "My assessment of ambiance, music, and entertainment",
+        "music_and_entertainment": "My specific feedback on DJs, music selection, and overall vibe",
+        "specific_points": ["My point 1", "My point 2", "My point 3"],
+        "sentiment_score": 4,
+        "improvement_suggestions": ["My suggestion 1", "My suggestion 2"]
     }}
     
-    Important: Ensure your response is ONLY the valid JSON object, with no additional text before or after.
+    MAKE SURE that:
+    1. All text fields are properly enclosed in double quotes
+    2. All arrays have square brackets and comma-separated values in double quotes
+    3. The sentiment_score is a number between 1-5 without quotes
+    4. There is no trailing comma after the last item in arrays or objects
+    5. Your response contains ONLY the JSON object - no other text before or after
     """
     
     response = st.session_state.conversation.predict(input=prompt)
     
     try:
-        # Extract JSON more robustly
-        json_pattern = r'(\{[\s\S]*\})'
-        match = re.search(json_pattern, response)
-        
-        if match:
-            json_str = match.group(1)
-            # Try to fix common JSON errors
-            json_str = json_str.replace("'", '"')  # Replace single quotes with double quotes
-            json_str = re.sub(r'([{,]\s*)([a-zA-Z_][a-zA-Z0-9_]*)\s*:', r'\1"\2":', json_str)  # Add quotes to keys
-            parsed_response = json.loads(json_str)
-        else:
-            # Fallback to direct loading if regex doesn't match
+        # First try: direct JSON parsing
+        try:
             parsed_response = json.loads(response)
+        except json.JSONDecodeError:
+            # Second try: Extract JSON using regex
+            json_pattern = r'(\{[\s\S]*\})'
+            match = re.search(json_pattern, response)
+            
+            if match:
+                json_str = match.group(1)
+                # Try to fix common JSON errors
+                json_str = json_str.replace("'", '"')  # Replace single quotes with double quotes
+                json_str = re.sub(r'([{,]\s*)([a-zA-Z_][a-zA-Z0-9_]*)\s*:', r'\1"\2":', json_str)  # Add quotes to keys
+                # Remove trailing commas before closing brackets/braces (common JSON error)
+                json_str = re.sub(r',\s*}', '}', json_str)
+                json_str = re.sub(r',\s*]', ']', json_str)
+                
+                parsed_response = json.loads(json_str)
+            else:
+                # If regex fails, create a manually constructed response
+                raise ValueError("Could not extract valid JSON from response")
             
         # Add raw transcription
         parsed_response["raw_transcription"] = transcribed_text
+        
+        # Validate required fields and provide defaults if missing
+        required_fields = [
+            "summary", "food_quality", "service", "atmosphere", 
+            "music_and_entertainment", "specific_points", 
+            "sentiment_score", "improvement_suggestions"
+        ]
+        
+        for field in required_fields:
+            if field not in parsed_response:
+                # Provide default values based on field type
+                if field == "sentiment_score":
+                    parsed_response[field] = 3  # Neutral default
+                elif field in ["specific_points", "improvement_suggestions"]:
+                    # Extract relevant points from the text if possible
+                    parts = transcribed_text.split('.')
+                    points = [p.strip() for p in parts if len(p.strip()) > 15][:3]  # Use up to 3 sentences as points
+                    if not points:
+                        points = ["Based on my experience"]
+                    
+                    # Convert to first person if not already
+                    first_person_points = []
+                    for point in points:
+                        if not any(fp in point.lower() for fp in ["i ", "my ", "me ", "we ", "our "]):
+                            # Convert to first person if possible
+                            point = "I " + point[0].lower() + point[1:]
+                        first_person_points.append(point)
+                    
+                    parsed_response[field] = first_person_points
+                else:
+                    # For text fields, provide a meaningful default based on the raw transcription
+                    if field == "summary":
+                        # Use first sentence of transcription as summary
+                        first_sentence = transcribed_text.split('.')[0] + "."
+                        parsed_response[field] = f"I visited this place and {first_sentence[0].lower() + first_sentence[1:]}"
+                    else:
+                        parsed_response[field] = f"Based on my experience, the {field.replace('_', ' ')} was satisfactory."
+        
         return parsed_response
-    except json.JSONDecodeError as e:
-        st.error(f"Failed to parse LLM response as JSON: {str(e)}")
-        # Create a basic response with the transcription
+        
+    except Exception as e:
+        # Gracefully handle any errors with useful defaults
+        st.warning(f"There was an issue processing your review, but we've created a basic summary for you.")
+        
+        # Create a basic but useful response from the raw transcription
+        # Parse the raw text to extract meaningful content for the review
+        sentences = [s.strip() for s in transcribed_text.split('.') if len(s.strip()) > 0]
+        
+        # Convert sentences to first person if they aren't already
+        first_person_sentences = []
+        for sentence in sentences:
+            if not any(fp in sentence.lower() for fp in ["i ", "my ", "me ", "we ", "our "]):
+                # Convert to first person
+                sentence = "I " + sentence[0].lower() + sentence[1:]
+            first_person_sentences.append(sentence)
+        
+        # Create reasonable defaults for each field
+        summary = first_person_sentences[0] if sentences else "I visited this restaurant."
+        
+        # Extract specific points based on sentence length and content
+        points = []
+        suggestions = []
+        
+        for s in first_person_sentences[1:]:
+            if "should" in s.lower() or "could" in s.lower() or "wish" in s.lower() or "hope" in s.lower():
+                suggestions.append(s)
+            elif len(s) > 15:  # Only use substantial sentences
+                points.append(s)
+        
+        # Ensure we have at least some points and suggestions
+        if not points and len(first_person_sentences) > 1:
+            points = [first_person_sentences[1]]
+        
+        if not suggestions and points:
+            suggestions = ["I hope they continue providing this quality of experience."]
+        
         return {
-            "summary": "Error processing review. Please try again.",
-            "food_quality": "N/A",
-            "service": "N/A",
-            "atmosphere": "N/A",
-            "music_and_entertainment": "N/A",
-            "specific_points": ["Unable to process specific points"],
-            "sentiment_score": 3,  # Neutral default
-            "improvement_suggestions": ["Unable to process improvement suggestions"],
-            "raw_transcription": transcribed_text,
-            "error": f"JSON parsing error: {str(e)}"
+            "summary": summary,
+            "food_quality": "I enjoyed the food based on my visit." if "food" in transcribed_text.lower() else "N/A",
+            "service": "The service was good during my visit." if "service" in transcribed_text.lower() else "N/A",
+            "atmosphere": "I liked the atmosphere of the place." if "atmosphere" in transcribed_text.lower() else "N/A",
+            "music_and_entertainment": "The music added to my experience." if any(x in transcribed_text.lower() for x in ["music", "dj", "entertainment"]) else "N/A",
+            "specific_points": points[:3] if points else ["I had an experience worth sharing."],
+            "sentiment_score": 4 if any(p in transcribed_text.lower() for p in ["good", "great", "excellent", "amazing", "enjoyed"]) else 3,
+            "improvement_suggestions": suggestions[:2] if suggestions else ["Based on my experience, I think they're doing well."],
+            "raw_transcription": transcribed_text
         }
+    
+# Here's the updated display_analysis function with simplified buttons
 
-# UI functions - Enhanced with better styling
+# Here's the updated display_analysis function with simplified buttons
+
 def display_analysis(review_analysis):
     with st.container():
         st.markdown(f"""
@@ -769,7 +1146,7 @@ def display_analysis(review_analysis):
             box-shadow: 0 4px 12px rgba(0,0,0,0.15); background-color: #2D2D2D; margin-bottom: 20px;">
             <h3 style="color: #FFFFFF; margin-top: 0; margin-bottom: 20px; font-size: 22px; 
                 border-bottom: 2px solid {BRAND_COLOR}; padding-bottom: 10px;">
-                Feedback Analysis
+                Your Feedback Analysis
             </h3>
         """, unsafe_allow_html=True)
         
@@ -879,8 +1256,221 @@ def display_analysis(review_analysis):
                 
             st.markdown("</ul></div>", unsafe_allow_html=True)
         
+        # Format the review for sharing and copying
+        formatted_review = format_review_for_sharing(review_analysis)
+        
+        # Create a container for the review text with copy functionality
+        st.markdown(f"""
+        <div style="margin-top: 20px; background-color: #333333; padding: 15px; border-radius: 8px;">
+            <h4 style="color: #FFFFFF; margin-top: 0; margin-bottom: 10px; font-size: 18px;">
+                <span style="margin-right: 8px;">📝</span> Your Review
+            </h4>
+            <p style="color: #E0E0E0; margin-bottom: 15px;">
+                Here's your formatted review:
+            </p>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        # Display the review in a code block for easy copying
+        st.code(formatted_review, language=None)
+        
+        # Simplified buttons - just Save Feedback and Start Over
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            if st.button("💾 Save Feedback", 
+                       use_container_width=True, 
+                       type="primary",
+                       key="save_feedback_display_btn"):
+                if save_review(review_analysis):
+                    st.success("Thanks for your feedback! It has been saved.")
+                    st.balloons()
+                    
+                    # Get Google Place ID for direct link
+                    PLACE_ID = os.environ.get("GOOGLE_PLACE_ID", "YOUR_PLACE_ID_HERE")
+                    google_review_url = generate_google_review_link(review_analysis, PLACE_ID)
+                    
+                    # Display Google Review prompt with increased width
+                    st.markdown(f"""
+                    <div style="background-color: #4285F4; padding: 20px; border-radius: 10px; margin-top: 20px; 
+                         box-shadow: 0 4px 12px rgba(0,0,0,0.2); width: 100%; max-width: 800px; margin-left: auto; margin-right: auto;">
+                        <h4 style="color: #FFFFFF; margin-top: 0; font-size: 20px; margin-bottom: 15px; text-align: center;">
+                            <span style="margin-right: 8px;">🌟</span> Share on Google Reviews?
+                        </h4>
+                        <p style="color: #FFFFFF; margin-bottom: 20px; text-align: center; font-size: 16px;">
+                            Would you mind also sharing your experience on Google Reviews to help other diners?
+                        </p>
+                        <div style="display: flex; justify-content: center;">
+                            <a href="{google_review_url}" target="_blank"
+                               style="display: inline-block; background-color: #FFFFFF; color: #4285F4; 
+                                      padding: 12px 25px; border-radius: 5px; text-decoration: none; 
+                                      font-weight: 500; box-shadow: 0 2px 5px rgba(0,0,0,0.2); font-size: 16px;">
+                                <img src="https://www.gstatic.com/images/branding/product/2x/googleg_48dp.png" 
+                                     style="height: 20px; vertical-align: middle; margin-right: 8px;">
+                                Open Google Reviews
+                            </a>
+                        </div>
+                    </div>
+                    """, unsafe_allow_html=True)
+                    
+                    # Add a "Done" button that works exactly like "Start Over"
+                    if st.button("✅ Done", key="done_after_save", use_container_width=True):
+                        # Reset states with error handling - exactly like "Start Over" button
+                        if hasattr(st.session_state, 'audio_file') and st.session_state.audio_file and os.path.exists(st.session_state.audio_file):
+                            try:
+                                os.remove(st.session_state.audio_file)
+                            except Exception as e:
+                                print(f"Error removing audio file: {str(e)}")
+                                
+                        st.session_state.audio_file = None
+                        st.session_state.show_analysis = False
+                        st.session_state.current_analysis = None
+                        st.session_state.is_recording = False
+                        st.session_state.record_again = True
+                        st.rerun()
+                else:
+                    st.error("Error saving your feedback. Please try again.")
+        
+        with col2:
+            if st.button("↩️ Start Over", use_container_width=True, key="start_over_display_btn"):
+                # Reset states with error handling
+                if hasattr(st.session_state, 'audio_file') and st.session_state.audio_file and os.path.exists(st.session_state.audio_file):
+                    try:
+                        os.remove(st.session_state.audio_file)
+                    except Exception as e:
+                        print(f"Error removing audio file: {str(e)}")
+                        
+                st.session_state.audio_file = None
+                st.session_state.show_analysis = False
+                st.session_state.current_analysis = None
+                st.session_state.is_recording = False
+                st.session_state.record_again = True
+                st.rerun()
+        
+        # End containers
         st.markdown("</div>", unsafe_allow_html=True)
+        
+        return False  # For compatibility with existing code
 
+# Modified format_review_for_sharing function to create a clean, copyable format
+def format_review_for_sharing(review_data):
+    """
+    Format review data for sharing as text.
+    Returns a well-formatted string ready to be pasted into Google Reviews.
+    """
+    # Extract key components from the review
+    summary = review_data.get('summary', '')
+    food_quality = review_data.get('food_quality', '')
+    service = review_data.get('service', '')
+    atmosphere = review_data.get('atmosphere', '')
+    music = review_data.get('music_and_entertainment', '')
+    
+    # Create a formatted review text
+    review_text = f"{summary}\n\n"
+    
+    if food_quality and food_quality != "N/A":
+        review_text += f"Food: {food_quality}\n"
+    if service and service != "N/A":
+        review_text += f"Service: {service}\n"
+    if atmosphere and atmosphere != "N/A":
+        review_text += f"Atmosphere: {atmosphere}\n"
+    if music and music != "N/A":
+        review_text += f"Music & Entertainment: {music}\n"
+    
+    # Add specific points if available
+    specific_points = review_data.get('specific_points', [])
+    if specific_points:
+        review_text += "\nHighlights:\n"
+        if isinstance(specific_points, list):
+            for point in specific_points:
+                if point and point != "N/A":
+                    review_text += f"- {point}\n"
+        elif isinstance(specific_points, str):
+            # Handle string representation of list
+            try:
+                # Try to convert to list if it's a string representation of a list
+                import ast
+                points_list = ast.literal_eval(specific_points)
+                for point in points_list:
+                    clean_point = str(point).strip().strip("'").strip('"')
+                    if clean_point and clean_point != "N/A":
+                        review_text += f"- {clean_point}\n"
+            except:
+                # If that fails, treat as comma-separated string
+                points = specific_points.strip("[]").split(',')
+                for point in points:
+                    clean_point = point.strip().strip("'").strip('"')
+                    if clean_point and clean_point != "N/A":
+                        review_text += f"- {clean_point}\n"
+    
+    return review_text
+
+# Generate Google Review Link function (unchanged)
+def generate_google_review_link(review_data, place_id):
+    """
+    Generate a URL that directs users to Google Reviews with pre-filled content.
+    
+    Args:
+        review_data: The processed review data dictionary
+        place_id: Your Google Business Profile Place ID
+    
+    Returns:
+        str: URL to Google Review page with pre-filled content
+    """
+    # Extract key components from the review
+    summary = review_data.get('summary', '')
+    food_quality = review_data.get('food_quality', '')
+    service = review_data.get('service', '')
+    atmosphere = review_data.get('atmosphere', '')
+    music = review_data.get('music_and_entertainment', '')
+    
+    # Create a formatted review text
+    review_text = f"{summary}\n\n"
+    
+    if food_quality and food_quality != "N/A":
+        review_text += f"Food: {food_quality}\n"
+    if service and service != "N/A":
+        review_text += f"Service: {service}\n"
+    if atmosphere and atmosphere != "N/A":
+        review_text += f"Atmosphere: {atmosphere}\n"
+    if music and music != "N/A":
+        review_text += f"Music & Entertainment: {music}\n"
+    
+    # Add specific points if available
+    specific_points = review_data.get('specific_points', [])
+    if specific_points:
+        review_text += "\nHighlights:\n"
+        if isinstance(specific_points, list):
+            for point in specific_points:
+                if point and point != "N/A":
+                    review_text += f"- {point}\n"
+        elif isinstance(specific_points, str):
+            # Handle string representation of list
+            try:
+                # Try to convert to list if it's a string representation of a list
+                import ast
+                points_list = ast.literal_eval(specific_points)
+                for point in points_list:
+                    clean_point = str(point).strip().strip("'").strip('"')
+                    if clean_point and clean_point != "N/A":
+                        review_text += f"- {clean_point}\n"
+            except:
+                # If that fails, treat as comma-separated string
+                points = specific_points.strip("[]").split(',')
+                for point in points:
+                    clean_point = point.strip().strip("'").strip('"')
+                    if clean_point and clean_point != "N/A":
+                        review_text += f"- {clean_point}\n"
+    
+    # URL encode the review text
+    import urllib.parse
+    encoded_review = urllib.parse.quote(review_text)
+    
+    # Create the Google review URL with the place ID and pre-filled review
+    review_url = f"https://search.google.com/local/writereview?placeid={place_id}&review={encoded_review}"
+    
+    return review_url
+                
 def collect_customer_info():
     # If the user is logged in, display their info without ability to edit
     if st.session_state.is_logged_in:
@@ -1229,6 +1819,271 @@ def display_animated_stars(sentiment_score, show_number=True):
     return rating_html
 
 # Helper functions for displaying reviews
+def generate_google_review_link(review_data, place_id):
+    """
+    Generate a URL that directs users to Google Reviews with pre-filled content.
+    
+    Args:
+        review_data: The processed review data dictionary
+        place_id: Your Google Business Profile Place ID
+    
+    Returns:
+        str: URL to Google Review page with pre-filled content
+    """
+    # Extract key components from the review
+    summary = review_data.get('summary', '')
+    food_quality = review_data.get('food_quality', '')
+    service = review_data.get('service', '')
+    atmosphere = review_data.get('atmosphere', '')
+    music = review_data.get('music_and_entertainment', '')
+    
+    # Create a formatted review text
+    review_text = f"{summary}\n\n"
+    
+    if food_quality and food_quality != "N/A":
+        review_text += f"Food: {food_quality}\n"
+    if service and service != "N/A":
+        review_text += f"Service: {service}\n"
+    if atmosphere and atmosphere != "N/A":
+        review_text += f"Atmosphere: {atmosphere}\n"
+    if music and music != "N/A":
+        review_text += f"Music & Entertainment: {music}\n"
+    
+    # Add specific points if available
+    specific_points = review_data.get('specific_points', [])
+    if specific_points:
+        review_text += "\nHighlights:\n"
+        if isinstance(specific_points, list):
+            for point in specific_points:
+                if point and point != "N/A":
+                    review_text += f"- {point}\n"
+        elif isinstance(specific_points, str):
+            # Handle string representation of list
+            try:
+                # Try to convert to list if it's a string representation of a list
+                import ast
+                points_list = ast.literal_eval(specific_points)
+                for point in points_list:
+                    clean_point = str(point).strip().strip("'").strip('"')
+                    if clean_point and clean_point != "N/A":
+                        review_text += f"- {clean_point}\n"
+            except:
+                # If that fails, treat as comma-separated string
+                points = specific_points.strip("[]").split(',')
+                for point in points:
+                    clean_point = point.strip().strip("'").strip('"')
+                    if clean_point and clean_point != "N/A":
+                        review_text += f"- {clean_point}\n"
+    
+    # URL encode the review text
+    import urllib.parse
+    encoded_review = urllib.parse.quote(review_text)
+    
+    # Create the Google review URL with the place ID and pre-filled review
+    review_url = f"https://search.google.com/local/writereview?placeid={place_id}&review={encoded_review}"
+    
+    return review_url
+
+def format_review_for_sharing(review_data):
+    """
+    Format review data for sharing as text.
+    Returns a well-formatted string ready to be pasted into Google Reviews.
+    """
+    # Extract key components from the review
+    summary = review_data.get('summary', '')
+    food_quality = review_data.get('food_quality', '')
+    service = review_data.get('service', '')
+    atmosphere = review_data.get('atmosphere', '')
+    music = review_data.get('music_and_entertainment', '')
+    
+    # Create a formatted review text
+    review_text = f"{summary}\n\n"
+    
+    if food_quality and food_quality != "N/A":
+        review_text += f"Food: {food_quality}\n"
+    if service and service != "N/A":
+        review_text += f"Service: {service}\n"
+    if atmosphere and atmosphere != "N/A":
+        review_text += f"Atmosphere: {atmosphere}\n"
+    if music and music != "N/A":
+        review_text += f"Music & Entertainment: {music}\n"
+    
+    # Add specific points if available
+    specific_points = review_data.get('specific_points', [])
+    if specific_points:
+        review_text += "\nHighlights:\n"
+        if isinstance(specific_points, list):
+            for point in specific_points:
+                if point and point != "N/A":
+                    review_text += f"- {point}\n"
+        elif isinstance(specific_points, str):
+            # Handle string representation of list
+            try:
+                # Try to convert to list if it's a string representation of a list
+                import ast
+                points_list = ast.literal_eval(specific_points)
+                for point in points_list:
+                    clean_point = str(point).strip().strip("'").strip('"')
+                    if clean_point and clean_point != "N/A":
+                        review_text += f"- {clean_point}\n"
+            except:
+                # If that fails, treat as comma-separated string
+                points = specific_points.strip("[]").split(',')
+                for point in points:
+                    clean_point = point.strip().strip("'").strip('"')
+                    if clean_point and clean_point != "N/A":
+                        review_text += f"- {clean_point}\n"
+    
+    return review_text
+def create_google_review_modal(review_data, place_id):
+    """
+    Creates a modal popup to prompt the user to share their review on Google.
+    
+    Args:
+        review_data: The review data dictionary
+        place_id: Google Place ID for the business
+    
+    Returns:
+        A Streamlit modal popup HTML string
+    """
+    # Generate the Google Review link with pre-filled content
+    google_review_url = generate_google_review_link(review_data, place_id)
+    
+    # Format the review for copying
+    formatted_review = format_review_for_sharing(review_data)
+    
+    # Create a styled modal popup - NOTE: Double curly braces for CSS in f-string
+    modal_html = f"""
+    <div id="google-review-modal" style="
+        display: none;
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background-color: rgba(0, 0, 0, 0.5);
+        z-index: 1000;
+        justify-content: center;
+        align-items: center;
+    ">
+        <div style="
+            background-color: #2D2D2D;
+            width: 90%;
+            max-width: 500px;
+            border-radius: 12px;
+            box-shadow: 0 8px 30px rgba(0, 0, 0, 0.3);
+            padding: 25px;
+            position: relative;
+            animation: modalFadeIn 0.3s ease-out;
+        ">
+            <button onclick="closeModal()" style="
+                position: absolute;
+                top: 15px;
+                right: 15px;
+                background: none;
+                border: none;
+                font-size: 20px;
+                color: #CCCCCC;
+                cursor: pointer;
+            ">×</button>
+            
+            <div style="text-align: center; margin-bottom: 20px;">
+                <img src="https://www.gstatic.com/images/branding/product/2x/googleg_48dp.png" 
+                     style="height: 30px; margin-bottom: 15px;">
+                <h3 style="color: #FFFFFF; margin: 0; font-size: 20px;">Share Your Review on Google</h3>
+            </div>
+            
+            <p style="color: #E0E0E0; margin-bottom: 20px; text-align: center;">
+                Thank you for your feedback! Would you like to help other diners by sharing your experience on Google Reviews?
+            </p>
+            
+            <div style="
+                background-color: #333333;
+                border-radius: 8px;
+                padding: 15px;
+                margin-bottom: 20px;
+                max-height: 150px;
+                overflow-y: auto;
+            ">
+                <p style="color: #BBBBBB; margin: 0 0 5px 0; font-size: 14px;">Your review:</p>
+                <p style="color: #FFFFFF; margin: 0; font-size: 14px; white-space: pre-line;">{formatted_review}</p>
+            </div>
+            
+            <div style="display: flex; justify-content: space-between;">
+                <button onclick="closeModal()" style="
+                    flex: 1;
+                    background-color: #444444;
+                    color: #FFFFFF;
+                    border: none;
+                    padding: 12px;
+                    border-radius: 6px;
+                    margin-right: 10px;
+                    cursor: pointer;
+                    font-weight: 500;
+                ">Maybe Later</button>
+                
+                <a href="{google_review_url}" target="_blank" style="
+                    flex: 1;
+                    background-color: #4285F4;
+                    color: #FFFFFF;
+                    border: none;
+                    padding: 12px;
+                    border-radius: 6px;
+                    text-align: center;
+                    text-decoration: none;
+                    font-weight: 500;
+                    cursor: pointer;
+                " onclick="closeModal()">Post to Google</a>
+            </div>
+        </div>
+    </div>
+    
+    <style>
+    @keyframes modalFadeIn {{
+        from {{ opacity: 0; transform: translateY(-20px); }}
+        to {{ opacity: 1; transform: translateY(0); }}
+    }}
+    </style>
+    
+    <script>
+    function showModal() {{
+        document.getElementById('google-review-modal').style.display = 'flex';
+        // Prevent scrolling of the page behind the modal
+        document.body.style.overflow = 'hidden';
+    }}
+    
+    function closeModal() {{
+        document.getElementById('google-review-modal').style.display = 'none';
+        // Re-enable scrolling
+        document.body.style.overflow = 'auto';
+    }}
+    
+    // Show the modal with a small delay
+    setTimeout(showModal, 500);
+    </script>
+    """
+    
+    return modal_html
+
+def trigger_google_review_popup(review_data):
+    """
+    Triggers the Google Review popup modal after saving a review.
+    
+    Args:
+        review_data: The review data dictionary
+    """
+    # Get Google Place ID for the business
+    PLACE_ID = os.environ.get("GOOGLE_PLACE_ID", "YOUR_PLACE_ID_HERE")
+    
+    # Create the modal popup HTML
+    modal_html = create_google_review_modal(review_data, PLACE_ID)
+    
+    # Inject the modal HTML
+    st.markdown(modal_html, unsafe_allow_html=True)
+    
+    # Return True to indicate the popup was triggered
+    return True
+
 def format_date(timestamp, format_str="%b %d, %Y at %I:%M %p"):
     if timestamp == 'Unknown date':
         return timestamp
@@ -1281,32 +2136,88 @@ def main():
     try:
         # Initialize state and styles
         init_session_state()
+        if "disable_state_validation" not in st.session_state:
+            st.session_state.disable_state_validation = True  # Set to False in production
+
+        # Add this at the beginning of your main() function
+        def check_environment_variables():
+            """Check if all required environment variables are set"""
+            required_vars = {
+                "GOOGLE_CLIENT_ID": GOOGLE_CLIENT_ID,
+                "GOOGLE_CLIENT_SECRET": GOOGLE_CLIENT_SECRET,
+                "GOOGLE_REDIRECT_URI": GOOGLE_REDIRECT_URI,
+                "OPENAI_API_KEY": os.environ.get("OPENAI_API_KEY"),
+                "LELAPA_API_TOKEN": os.environ.get("LELAPA_API_TOKEN"),
+            }
+            
+            missing_vars = [var for var, value in required_vars.items() if not value]
+            
+            if missing_vars:
+                st.error(f"Missing required environment variables: {', '.join(missing_vars)}")
+                st.info("Please add these variables to your .env file or environment.")
+                
+                # Show current configuration
+                st.expander("Current Environment Configuration", expanded=True)
+                for var, value in required_vars.items():
+                    masked_value = "✓ Set" if value else "❌ Missing"
+                    if value and var.endswith(("SECRET", "KEY", "TOKEN")):
+                        masked_value = f"✓ Set (length: {len(value)})"
+                    st.write(f"{var}: {masked_value}")
+                
+                return False
+            return True
+
+        # Call this at the beginning of main()
+        if not check_environment_variables():
+            st.stop()
+
+        # Debug environment variables
+        if not GOOGLE_CLIENT_ID or not GOOGLE_CLIENT_SECRET:
+            st.error("Google OAuth credentials are not properly configured. Please check your .env file.")
+            st.write("Debug - GOOGLE_CLIENT_ID set:", bool(GOOGLE_CLIENT_ID))
+            st.write("Debug - GOOGLE_CLIENT_SECRET set:", bool(GOOGLE_CLIENT_SECRET))
+            st.write("Debug - GOOGLE_REDIRECT_URI:", GOOGLE_REDIRECT_URI)
         load_css()
         
-        # Ensure necessary directories exist
-        ensure_directories()
+        # Handle OAuth callback if 'code' is in the query params
+        if "code" in st.query_params:
+            code = st.query_params["code"]
+            st.write("Debug - OAuth code received")
+            
+            # Verify state parameter if available
+            expected_state = st.session_state.get("oauth_state")
+            received_state = st.query_params.get("state")
+            
+            if expected_state and received_state and expected_state != received_state:
+                st.error("Invalid state parameter. Authentication failed.")
+                # Clear params and return
+                st.query_params.clear()
+            else:
+                # Process the callback
+                if process_oauth_callback(code):
+                    st.success("Authentication successful!")
+                    # Clear URL parameters
+                    st.query_params.clear()
+                    st.rerun()
+                else:
+                    st.error("Authentication failed. Please try again.")
+                    # Clear parameters anyway
+                    st.query_params.clear()
         
-        # App header with logo and title
-        col1, col2 = st.columns([1, 5])
-        with col1:
-            st.image("https://emojipedia-us.s3.amazonaws.com/source/microsoft-teams/337/fork-and-knife-with-plate_1f37d-fe0f.png", width=80)
-        with col2:
-            st.title("Restaurant Feedback Portal")
-            st.markdown("<p style='font-size: 18px; margin-top: -10px; color: #E0E0E0;'>Share your dining experience and help us improve!</p>", unsafe_allow_html=True)
-        
+        ensure_directories()        
         # Sidebar with improved styling
         with st.sidebar:
-            st.header("About this system")
+            st.header("About")
             st.markdown(f"""
             <div style="background-color: #333333; padding: 20px; border-radius: 10px; 
                  box-shadow: 0 2px 5px rgba(0,0,0,0.05); margin-bottom: 20px;">
-                <p style="margin-top: 0; color: #E0E0E0;">Share your dining experience with us! Your feedback helps us improve.</p>
-                <p style="margin-bottom: 10px; color: #E0E0E0;">This system will:</p>
+                <p style="margin-top: 0; color: #E0E0E0;">I'd love to hear about your experience with us! Your feedback helps me make things even better.</p>
+                <p style="margin-bottom: 10px; color: #E0E0E0;">Here's how it works:</p>
                 <ol style="padding-left: 20px; margin-bottom: 0; color: #E0E0E0;">
-                    <li style="margin-bottom: 8px;">Record your verbal feedback (25 seconds)</li>
-                    <li style="margin-bottom: 8px;">Transcribe what you said</li>
-                    <li style="margin-bottom: 8px;">Analyze your feedback</li>
-                    <li style="margin-bottom: 0;">Save your insights for the restaurant</li>
+                    <li style="margin-bottom: 8px;">Record your thoughts (up to 25 seconds)</li>
+                    <li style="margin-bottom: 8px;">I'll transcribe what you said</li>
+                    <li style="margin-bottom: 8px;">Your feedback gets analyzed</li>
+                    <li style="margin-bottom: 0;">You can share it on Google Reviews too!</li>
                 </ol>
             </div>
             """, unsafe_allow_html=True)
@@ -1316,18 +2227,31 @@ def main():
             
             # If user is logged in, show user info and logout button
             if check_login_status():
+                # Display Google profile picture if available
+                profile_pic = ""
+                if st.session_state.current_user.get('picture'):
+                    profile_pic = f"""<img src="{st.session_state.current_user.get('picture')}" 
+                                       style="width: 50px; height: 50px; border-radius: 50%; margin-right: 15px;">"""
+                else:
+                    profile_pic = f"""<div style="width: 50px; height: 50px; border-radius: 50%; background-color: {BRAND_COLOR}; 
+                                       color: black; display: flex; align-items: center; justify-content: center; 
+                                       font-size: 20px; margin-right: 15px;">
+                                       {st.session_state.current_user.get('name', 'U')[0].upper()}
+                                   </div>"""
+                
+                google_badge = ""
+                if 'google_id' in st.session_state.current_user:
+                    google_badge = """<span style="background-color: #4285F4; color: white; padding: 3px 8px; 
+                                     border-radius: 10px; font-size: 12px; margin-left: 10px;">Google</span>"""
+                
                 st.markdown(f"""
                 <div style="background-color: #333333; padding: 20px; border-radius: 10px; 
                      box-shadow: 0 2px 5px rgba(0,0,0,0.05); margin-bottom: 20px;">
                     <div style="display: flex; align-items: center; margin-bottom: 15px;">
-                        <div style="width: 50px; height: 50px; border-radius: 50%; background-color: {BRAND_COLOR}; 
-                             color: white; display: flex; align-items: center; justify-content: center; 
-                             font-size: 20px; margin-right: 15px;">
-                            {st.session_state.current_user.get('name', 'U')[0].upper()}
-                        </div>
+                        {profile_pic}
                         <div>
                             <p style="margin: 0; font-weight: 600; font-size: 18px; color: #FFFFFF;">
-                                {st.session_state.current_user.get('name', 'User')}
+                                {st.session_state.current_user.get('name', 'User')}{google_badge}
                             </p>
                             <p style="margin: 0; color: #BBBBBB; font-size: 14px;">
                                 {st.session_state.current_user.get('email', 'N/A')}
@@ -1335,7 +2259,7 @@ def main():
                         </div>
                     </div>
                     <p style="margin: 0; font-size: 14px; color: #BBBBBB;">
-                        Last login: {format_date(st.session_state.current_user.get('last_login', 'Unknown'))}
+                        Last visit: {format_date(st.session_state.current_user.get('last_login', 'Unknown'))}
                     </p>
                 </div>
                 """, unsafe_allow_html=True)
@@ -1368,16 +2292,28 @@ def main():
         
         # Check if user is logged in before showing main content
         if not check_login_status():
+            # Only show logo without the title on login page
+            col1, col2 = st.columns([1, 5])
+            with col1:
+                st.image(r"C:\Users\Michael\Downloads\Vintage Colorful Retro Vibes Typographic Product Brand Logo.png", width=80)
+            
             # User is not logged in, show login form
             render_login_form()
             
             if st.session_state.register_success:
                 st.success(st.session_state.register_success)
         else:
+            # User is logged in - show full header with title
+            col1, col2 = st.columns([1, 5])
+            with col1:
+                st.image(r"C:\Users\Michael\Downloads\Vintage Colorful Retro Vibes Typographic Product Brand Logo.png", width=80)
+            with col2:
+                st.title("My Restaurant Feedback Portal")
+            
             # User is logged in, show main content with improved tab styling
             if st.session_state.is_owner:
                 # Show all tabs for owner
-                tab1, tab2, tab3 = st.tabs(["📝 Leave Feedback", "📋 View All Feedback", "👤 My Feedback"])
+                tab1, tab2, tab3 = st.tabs(["📝 Leave Feedback", "📋 All Feedback", "👤 My Feedback"])
             else:
                 # Show only Leave Feedback and My Feedback tabs for regular users
                 tab1, tab3 = st.tabs(["📝 Leave Feedback", "👤 My Feedback"])
@@ -1386,10 +2322,10 @@ def main():
             with tab1:
                 st.markdown(f"""
                 <h2 style="color: #FFFFFF; margin-bottom: 20px;">
-                    <span style="margin-right: 10px;">📝</span> Share Your Experience
+                    <span style="margin-right: 10px;">📝</span> Tell Me About Your Experience
                 </h2>
                 <p style="font-size: 16px; margin-bottom: 20px; color: #E0E0E0;">
-                    Please tell us about your dining experience at our restaurant. Your feedback helps us improve!
+                    I value your honest feedback! Let me know what you enjoyed and what I could improve.
                 </p>
                 """, unsafe_allow_html=True)
                 
@@ -1407,7 +2343,7 @@ def main():
                             <span style="margin-right: 8px;">🎙️</span> Voice Feedback
                         </h3>
                         <p style="margin-bottom: 20px; color: #E0E0E0;">
-                            Record your feedback by speaking into your microphone. This is the fastest way to share your experience.
+                            Just speak into your mic - it's the quickest way to share your thoughts!
                         </p>
                     </div>
                     """, unsafe_allow_html=True)
@@ -1419,57 +2355,27 @@ def main():
                     with st.expander("Having Audio Problems?"):
                         st.markdown("""
                         ### Microphone Access
-                        - **Mobile**: Ensure your browser has microphone permissions
-                        - **Desktop**: Check your system's sound settings and browser permissions
-                        - **iOS devices**: Use Safari for best microphone support
-                        - **Android**: Make sure microphone access is enabled for your browser
+                        - **Mobile**: Check your browser has mic permissions
+                        - **Desktop**: Check your sound settings and browser permissions
+                        - **iOS devices**: Safari works best for mic access
+                        - **Android**: Make sure mic access is enabled
                         
-                        ### Audio Quality Issues
-                        - Try moving to a quieter environment
-                        - Speak a bit louder than your normal speaking voice
-                        - Make sure you're not covering the microphone
-                        - On mobile, don't cover the bottom of your device
+                        ### Audio Quality Tips
+                        - Find a quieter spot if possible
+                        - Speak a bit louder than normal
+                        - Don't cover your mic
+                        - On mobile, keep the bottom of your device clear
                         
-                        ### If Recording Doesn't Work
-                        - Refresh the page and try again
-                        - Try a different browser (Chrome or Safari recommended)
-                        - Consider using the text input method instead
+                        ### Troubleshooting
+                        - Try refreshing the page
+                        - Try Chrome or Safari if other browsers don't work
+                        - You can always use the text input option instead
                         """)
 
                 # Display analysis and save options
                 if st.session_state.show_analysis and st.session_state.current_analysis:
                     with col1:
-                        display_analysis(st.session_state.current_analysis)
-                        
-                        # Save/Cancel buttons with improved styling
-                        col_save, col_cancel = st.columns(2)
-                        with col_save:
-                            if st.button("💾 Save Feedback", type="primary", use_container_width=True):
-                                if save_review(st.session_state.current_analysis):
-                                    st.success("Thank you! Your feedback has been saved.")
-                                    # Reset states
-                                    st.session_state.audio_file = None
-                                    st.session_state.show_analysis = False
-                                    st.session_state.current_analysis = None
-                                    st.session_state.is_recording = False
-                                    st.rerun()
-                        
-                        with col_cancel:
-                            if st.button("↩️ Start Over", use_container_width=True):
-                                # Reset states with error handling
-                                if hasattr(st.session_state, 'audio_file') and st.session_state.audio_file and os.path.exists(st.session_state.audio_file):
-                                    try:
-                                        os.remove(st.session_state.audio_file)
-                                    except Exception as e:
-                                        print(f"Error removing audio file: {str(e)}")
-                                        
-                                st.session_state.audio_file = None
-                                st.session_state.show_analysis = False
-                                st.session_state.current_analysis = None
-                                st.session_state.is_recording = False
-                                st.session_state.record_again = True
-                                st.rerun()
-
+                        post_to_google = display_analysis(st.session_state.current_analysis)
                 # Text input - Right column with improved styling
                 with col2:
                     if not st.session_state.show_analysis:
@@ -1480,29 +2386,29 @@ def main():
                                 <span style="margin-right: 8px;">✏️</span> Written Feedback
                             </h3>
                             <p style="margin-bottom: 20px; color: #E0E0E0;">
-                                Prefer typing? Share your experience by writing your feedback below.
+                                Prefer typing? Share your experience in the box below.
                             </p>
                         </div>
                         """, unsafe_allow_html=True)
                         
-                        text_feedback = st.text_area("Your feedback", height=200, 
-                                                   placeholder="Tell us about your experience... What did you enjoy? What could we improve?")
+                        text_feedback = st.text_area("Your thoughts", height=200, 
+                                                   placeholder="Tell me what you liked or didn't like... What made your experience special? What could I improve?")
                         
-                        if st.button("📝 Submit Written Feedback", type="primary", use_container_width=True):
+                        if st.button("📝 Submit Feedback", type="primary", use_container_width=True):
                             if text_feedback:
                                 with st.spinner("Analyzing your feedback..."):
                                     review_analysis, validation_error = process_and_validate_review(text_feedback)
                                 
                                 if validation_error:
                                     st.error(validation_error)
-                                    st.info("Please provide more details about your restaurant experience.")
+                                    st.info("Could you share more details about your restaurant experience?")
                                 elif review_analysis:
                                     st.success("Analysis complete!")
                                     st.session_state.current_analysis = review_analysis
                                     st.session_state.show_analysis = True
                                     st.rerun()
                             else:
-                                st.warning("Please enter your feedback before submitting.")
+                                st.warning("Please share your thoughts before submitting.")
 
             # View all feedback tab with improved styling
             if st.session_state.is_owner:
@@ -1512,7 +2418,7 @@ def main():
                         <span style="margin-right: 10px;">📋</span> All Customer Feedback
                     </h2>
                     <p style="font-size: 16px; margin-bottom: 20px; color: #E0E0E0;">
-                        Review all customer feedback to identify trends and improvement opportunities.
+                        See what your customers are saying and find ways to improve.
                     </p>
                     """, unsafe_allow_html=True)
                     
@@ -1539,8 +2445,7 @@ def main():
                         </div>
                         """, unsafe_allow_html=True)
                         
-                        search_input = st.text_input("Search reviews by keyword:", placeholder="Type to search...")
-                        
+                        search_input = st.text_input("Search reviews by keyword:", placeholder="Type to search...")                        
                         # Sentiment filter
                         col1, col2 = st.columns(2)
                         with col1:
@@ -1733,10 +2638,10 @@ def main():
             with tab3:
                 st.markdown(f"""
                 <h2 style="color: #FFFFFF; margin-bottom: 20px;">
-                    <span style="margin-right: 10px;">👤</span> My Feedback History
+                    <span style="margin-right: 10px;">👤</span> Your Feedback History
                 </h2>
                 <p style="font-size: 16px; margin-bottom: 20px; color: #E0E0E0;">
-                    View all the feedback you've submitted to our restaurant.
+                    Here's all the feedback you've shared with me.
                 </p>
                 """, unsafe_allow_html=True)
                 
@@ -1751,7 +2656,7 @@ def main():
                 user_reviews = get_user_reviews(user_id, limit=10)
                 
                 if not user_reviews:
-                    st.info("You haven't submitted any feedback yet.")
+                    st.info("You haven't shared any feedback yet. I'd love to hear your thoughts!")
                 else:
                     # Display count with message about limit
                     st.markdown(f"""
@@ -1762,7 +2667,7 @@ def main():
                     if total_user_reviews_count > 10:
                         st.markdown(f"Showing your 10 most recent reviews (out of {total_user_reviews_count} total)")
                     else:
-                        st.markdown(f"You have submitted {total_user_reviews_count} reviews.")
+                        st.markdown(f"You've shared {total_user_reviews_count} reviews with me. Thank you!")
                     
                     st.markdown("</p></div>", unsafe_allow_html=True)
                     
@@ -1837,11 +2742,11 @@ def main():
                             
                             with col4:
                                 st.markdown(f"""
-                                <div style="background-color: #f8f9fa; padding: 15px; border-radius: 8px; margin-bottom: 15px;">
-                                    <h4 style="color: {BRAND_COLOR}; margin-top: 0; margin-bottom: 10px; font-size: 16px;">
+                                <div style="background-color: #333333; padding: 15px; border-radius: 8px; margin-bottom: 15px;">
+                                    <h4 style="color: #FFFFFF; margin-top: 0; margin-bottom: 10px; font-size: 16px;">
                                         Music & Entertainment
                                     </h4>
-                                    <p style="margin: 0;">{review.get('music_and_entertainment', 'N/A')}</p>
+                                    <p style="margin: 0; color: #E0E0E0;">{review.get('music_and_entertainment', 'N/A')}</p>
                                 </div>
                                 """, unsafe_allow_html=True)
                         
@@ -1884,14 +2789,14 @@ def main():
         st.markdown(f"""
         <div style="text-align: center; margin-top: 50px; padding: 20px; border-top: 1px solid #444444;">
             <p style="color: #BBBBBB; font-size: 14px;">
-                Thank you for sharing your feedback! • © {datetime.now().year} Restaurant Feedback System
+                Thank you for sharing your thoughts with me! • © {datetime.now().year} My Restaurant
             </p>
         </div>
         """, unsafe_allow_html=True)
         
     except Exception as e:
-        st.error(f"An error occurred: {str(e)}")
-        st.info("Please refresh the page and try again.")
+        st.error(f"Oops! Something went wrong: {str(e)}")
+        st.info("Please refresh the page and try again. If the problem persists, please let me know.")
 
 if __name__ == "__main__":
     main()
