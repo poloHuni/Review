@@ -33,7 +33,7 @@ LIGHT_COLOR = "#5a7d7c"
 # Google OAuth config
 GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "")
 GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET", "")
-GOOGLE_REDIRECT_URI = os.environ.get("GOOGLE_REDIRECT_URI", "http://localhost:8501")
+GOOGLE_REDIRECT_URI = os.environ.get("GOOGLE_REDIRECT_URI", "https://reviewsai.streamlit.app")
 GOOGLE_SCOPES = [
     'openid',  # Add this scope to match what Google automatically includes
     'https://www.googleapis.com/auth/userinfo.email',
